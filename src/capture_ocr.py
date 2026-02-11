@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import base64
 import os
 import sys
@@ -6,9 +6,14 @@ import sys
 import pyperclip
 import requests
 from dotenv import load_dotenv
-from mss import mss, tools`r`n
+from mss import mss, tools
 
-def capture_primary_screen_png_bytes() -> bytes:`r`n    with mss() as sct:`r`n        monitor = sct.monitors[1]`r`n        shot = sct.grab(monitor)`r`n        return tools.to_png(shot.rgb, shot.size)
+
+def capture_primary_screen_png_bytes() -> bytes:
+    with mss() as sct:
+        monitor = sct.monitors[1]
+        shot = sct.grab(monitor)
+        return tools.to_png(shot.rgb, shot.size)
 
 
 def png_to_data_uri(png_bytes: bytes) -> str:
@@ -51,6 +56,15 @@ def deepinfra_ocr(data_uri: str, token: str, model: str, base_url: str) -> str:
         return str(data)
 
 
+def resolve_deepinfra_token() -> str:
+    return (
+        os.getenv("DEEPINFRA_API_TOKEN", "").strip()
+        or os.getenv("DEEPINFRA_API_KEY", "").strip()
+        or os.getenv("DEEPINFRA_TOKEN", "").strip()
+        or os.getenv("DEEPINFRA", "").strip()
+    )
+
+
 def main() -> int:
     load_dotenv()
 
@@ -59,14 +73,17 @@ def main() -> int:
     parser.add_argument("--copy", action="store_true", help="Copy OCR text to clipboard")
     args = parser.parse_args()
 
-    token = os.getenv("DEEPINFRA_API_TOKEN", "").strip()
-    model = os.getenv("DEEPINFRA_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct").strip()
+    token = resolve_deepinfra_token()
+    model = os.getenv("DEEPINFRA_MODEL", "deepseek-ai/DeepSeek-OCR").strip()
     base_url = os.getenv(
         "DEEPINFRA_BASE_URL", "https://api.deepinfra.com/v1/openai/chat/completions"
     ).strip()
 
     if not token or token == "your_token_here":
-        print("Missing DEEPINFRA_API_TOKEN in environment or .env", file=sys.stderr)
+        print(
+            "Missing DeepInfra token. Set one of: DEEPINFRA_API_TOKEN, DEEPINFRA_API_KEY, DEEPINFRA_TOKEN, DEEPINFRA",
+            file=sys.stderr,
+        )
         return 1
 
     try:
