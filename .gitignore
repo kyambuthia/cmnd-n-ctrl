@@ -5,6 +5,7 @@
 # Keep root Cargo.lock tracked (binary workspace), but ignore nested core workspace lockfile
 /core/Cargo.lock
 apps/desktop-tauri/src-tauri/Cargo.lock
+apps/desktop-tauri/src-tauri/gen/
 
 # Tauri / frontend dependencies and build outputs
 **/node_modules/
