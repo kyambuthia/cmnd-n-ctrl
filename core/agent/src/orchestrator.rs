@@ -95,7 +95,8 @@ where
             .unwrap_or(0);
         let tools = self.tool_registry.list();
         let mut executed_actions = Vec::new();
-        let mut action_events: Vec<ActionEvent> = Vec::new();
+        let mut proposed_actions: Vec<ActionEvent> = Vec::new();
+        let mut executed_action_events: Vec<ActionEvent> = Vec::new();
         let mut tool_results: Vec<ToolResult> = Vec::new();
         let mut requested_tool_calls = Vec::new();
         let mut policy_decisions = Vec::new();
@@ -109,7 +110,7 @@ where
                     requested_tool_calls.push(call.name.clone());
                     if !self.tool_registry.has_tool(&call.name) {
                         executed_actions.push(format!("denied:{}:unknown_tool", call.name));
-                        action_events.push(ActionEvent {
+                        proposed_actions.push(ActionEvent {
                             tool_name: call.name.clone(),
                             capability_tier: capability_tier_label(&CapabilityTier::SystemActions),
                             status: "denied".to_string(),
@@ -134,10 +135,17 @@ where
                     );
                     match auth {
                         Authorization::Allow => {
+                            proposed_actions.push(ActionEvent {
+                                tool_name: call.name.clone(),
+                                capability_tier: capability_tier_label(&tier),
+                                status: "approved".to_string(),
+                                reason: None,
+                                evidence_summary: None,
+                            });
                             let result = self.action_backend.execute_tool(&call);
                             let evidence_summary = result.evidence.summary.clone();
                             executed_actions.push(call.name.clone());
-                            action_events.push(ActionEvent {
+                            executed_action_events.push(ActionEvent {
                                 tool_name: call.name.clone(),
                                 capability_tier: capability_tier_label(&tier),
                                 status: "executed".to_string(),
@@ -154,7 +162,7 @@ where
                         }
                         Authorization::RequireConfirmation { reason } => {
                             pending_confirmation = true;
-                            action_events.push(ActionEvent {
+                            proposed_actions.push(ActionEvent {
                                 tool_name: call.name.clone(),
                                 capability_tier: capability_tier_label(&tier),
                                 status: "consent_required".to_string(),
@@ -170,7 +178,7 @@ where
                             executed_actions.push(format!("confirm_required:{}:{}", call.name, reason));
                         }
                         Authorization::Deny { reason } => {
-                            action_events.push(ActionEvent {
+                            proposed_actions.push(ActionEvent {
                                 tool_name: call.name.clone(),
                                 capability_tier: capability_tier_label(&tier),
                                 status: "denied".to_string(),
@@ -211,10 +219,15 @@ where
             policy_decisions,
         });
 
+        let mut action_events = proposed_actions.clone();
+        action_events.extend(executed_action_events.clone());
+
         ChatResponse {
             final_text,
             audit_id,
             actions_executed: executed_actions,
+            proposed_actions,
+            executed_action_events,
             action_events,
         }
     }

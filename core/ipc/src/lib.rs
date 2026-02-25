@@ -71,6 +71,8 @@ pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
     pub actions_executed: Vec<String>,
+    pub proposed_actions: Vec<ActionEvent>,
+    pub executed_action_events: Vec<ActionEvent>,
     pub action_events: Vec<ActionEvent>,
 }
 

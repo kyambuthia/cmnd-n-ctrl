@@ -164,6 +164,39 @@ function normalizeActionEvents(result) {
   return legacy.map(legacyEntryToActionEvent);
 }
 
+function normalizeProposedActions(result) {
+  const proposed = Array.isArray(result && result.proposed_actions) ? result.proposed_actions : [];
+  if (proposed.length) {
+    return proposed.map((evt) => ({
+      tool_name: evt.tool_name || '(unknown)',
+      capability_tier: normalizeTier(evt.capability_tier),
+      status: evt.status || 'unknown',
+      reason: evt.reason || null,
+      evidence_summary: null,
+    }));
+  }
+
+  return normalizeActionEvents(result).filter(
+    (evt) => evt.status === 'consent_required' || evt.status === 'denied' || evt.status === 'approved',
+  );
+}
+
+function normalizeExecutedActionEvents(result) {
+  const executed = Array.isArray(result && result.executed_action_events)
+    ? result.executed_action_events
+    : [];
+  if (executed.length) {
+    return executed.map((evt) => ({
+      tool_name: evt.tool_name || '(unknown)',
+      capability_tier: normalizeTier(evt.capability_tier),
+      status: evt.status || 'executed',
+      reason: evt.reason || null,
+      evidence_summary: evt.evidence_summary || null,
+    }));
+  }
+  return normalizeActionEvents(result).filter((evt) => evt.status === 'executed');
+}
+
 function clearConsent() {
   pendingConsent = null;
   consentApprovalArmed = false;
@@ -234,6 +267,8 @@ function parsePendingConsent(actions) {
 }
 
 function renderChatResult(result) {
+  const proposedActions = normalizeProposedActions(result);
+  const executedActionEvents = normalizeExecutedActionEvents(result);
   const actionEvents = normalizeActionEvents(result);
   auditEl.textContent = `audit_id: ${result.audit_id || 'n/a'}`;
   setActions(
@@ -242,7 +277,7 @@ function renderChatResult(result) {
       : actionEvents.map((evt) => `${evt.status}:${evt.tool_name}`),
   );
 
-  const pending = parsePendingConsent(actionEvents);
+  const pending = parsePendingConsent(proposedActions);
   if (pending.length > 0) {
     showConsent(pending);
     setCurrentAction(
@@ -255,8 +290,8 @@ function renderChatResult(result) {
     return;
   }
 
-  const denied = actionEvents.filter((evt) => evt.status === 'denied');
-  const executed = actionEvents.filter((evt) => evt.status === 'executed');
+  const denied = proposedActions.filter((evt) => evt.status === 'denied');
+  const executed = executedActionEvents;
   if (executed.length > 0) {
     setCurrentAction(
       'ok',
