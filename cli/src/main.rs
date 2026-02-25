@@ -1,5 +1,6 @@
 use std::env;
-use std::io::{self, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 
 use agent::AgentService;
 use ipc::jsonrpc::{Id, Request};
@@ -42,6 +43,7 @@ fn print_help() {
     println!("  cli tools");
     println!("  cli chat <message> [--provider <name>] [--require-confirmation]");
     println!("  cli serve-stdio");
+    println!("  cli serve-http [--addr <host:port>]");
 }
 
 fn main() {
@@ -115,6 +117,25 @@ fn main() {
         "serve-stdio" => {
             if let Err(err) = serve_stdio_jsonrpc() {
                 eprintln!("stdio server error: {err}");
+                std::process::exit(1);
+            }
+        }
+        "serve-http" => {
+            let mut addr = "127.0.0.1:7777".to_string();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--addr" {
+                    if let Some(next) = args.get(i + 1) {
+                        addr = next.clone();
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+
+            if let Err(err) = serve_http_jsonrpc(&addr) {
+                eprintln!("http server error: {err}");
                 std::process::exit(1);
             }
         }
@@ -202,4 +223,123 @@ fn to_wire_response(response: ipc::jsonrpc::Response) -> WireResponse {
         result,
         error,
     }
+}
+
+fn serve_http_jsonrpc(addr: &str) -> io::Result<()> {
+    let listener = TcpListener::bind(addr)?;
+    eprintln!("listening on http://{addr}/jsonrpc");
+
+    let service = AgentService::new_for_platform("ipc-http");
+    let mut server = JsonRpcServer::new(service);
+
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("accept error: {err}");
+                continue;
+            }
+        };
+
+        if let Err(err) = handle_http_connection(&mut stream, &mut server) {
+            let _ = write_http_error(&mut stream, 500, "Internal Server Error", &format!("{err}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_http_connection(stream: &mut TcpStream, server: &mut JsonRpcServer<AgentService>) -> io::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line)? == 0 {
+        return Ok(());
+    }
+    let request_line = request_line.trim_end_matches(&['\r', '\n'][..]).to_string();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let path = parts.next().unwrap_or_default();
+
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 || line == "\r\n" || line == "\n" {
+            break;
+        }
+        let line = line.trim_end_matches(&['\r', '\n'][..]);
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    if method != "POST" || path != "/jsonrpc" {
+        return write_http_error(stream, 404, "Not Found", "Use POST /jsonrpc");
+    }
+
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body)?;
+    let body_str = String::from_utf8(body)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("utf8 body: {err}")))?;
+
+    let wire_req = match parse_wire_request(&body_str) {
+        Ok(req) => req,
+        Err(err) => {
+            let payload = serde_json::to_string(&WireResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Value::Null,
+                result: None,
+                error: Some(WireError {
+                    code: -32700,
+                    message: format!("parse error: {err}"),
+                }),
+            })
+            .map_err(|e| io::Error::other(format!("serialize parse error response: {e}")))?;
+            return write_http_json(stream, 200, &payload);
+        }
+    };
+
+    let raw_req = Request::new(
+        json_value_to_id(wire_req.id.unwrap_or(Value::Null)),
+        wire_req.method,
+        wire_req.params.to_string(),
+    );
+    let wire_resp = to_wire_response(server.handle(raw_req));
+    let payload = serde_json::to_string(&wire_resp)
+        .map_err(|err| io::Error::other(format!("serialize response: {err}")))?;
+    write_http_json(stream, 200, &payload)
+}
+
+fn write_http_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Result<()> {
+    let status_text = match status {
+        200 => "OK",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        status_text,
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()
+}
+
+fn write_http_error(stream: &mut TcpStream, status: u16, status_text: &str, message: &str) -> io::Result<()> {
+    let body = serde_json::json!({ "error": message }).to_string();
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        status_text,
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()
 }
