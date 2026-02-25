@@ -10,6 +10,11 @@ impl ToolRegistry {
         Self {
             tools: vec![
                 Tool {
+                    name: "time.now".to_string(),
+                    description: "Return the current UTC timestamp from the local runtime".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}".to_string(),
+                },
+                Tool {
                     name: "echo".to_string(),
                     description: "Echo a payload for testing tool orchestration".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"input\":{\"type\":\"string\"}},\"required\":[\"input\"]}".to_string(),
