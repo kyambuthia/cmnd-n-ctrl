@@ -198,9 +198,11 @@ fn jsonrpc_request(
 
 #[cfg(feature = "tauri-app")]
 fn tauri_integration_contract() {
-    let _builder = tauri::Builder::default()
+    tauri::Builder::default()
         .manage(TauriBridgeState::default())
-        .invoke_handler(tauri::generate_handler![jsonrpc_request]);
+        .invoke_handler(tauri::generate_handler![jsonrpc_request])
+        .run(tauri::generate_context!())
+        .expect("failed to run tauri app");
 }
 
 #[cfg(not(feature = "tauri-app"))]
@@ -226,7 +228,6 @@ fn main() {
 #[cfg(feature = "tauri-app")]
 fn main() {
     tauri_integration_contract();
-    println!("desktop bridge tauri-app feature compiled (command registered in builder)");
 }
 
 #[cfg(test)]
