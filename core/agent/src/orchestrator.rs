@@ -90,6 +90,16 @@ where
         provider_config: ProviderConfig,
         mode: ChatMode,
     ) -> ChatResponse {
+        self.run_with_confirmation(messages, provider_config, mode, false)
+    }
+
+    pub fn run_with_confirmation(
+        &mut self,
+        messages: Vec<ChatMessage>,
+        provider_config: ProviderConfig,
+        mode: ChatMode,
+        user_confirmed: bool,
+    ) -> ChatResponse {
         let audit_id = self.next_audit_id();
         let request_fingerprint = request_fingerprint(&messages, &provider_config, &mode);
         let timestamp_unix_seconds = SystemTime::now()
@@ -134,7 +144,7 @@ where
                         &call,
                         &PolicyContext {
                             mode: mode.clone(),
-                            user_confirmed: false,
+                            user_confirmed,
                         },
                     );
                     match auth {
@@ -234,6 +244,7 @@ where
             final_text,
             audit_id,
             request_fingerprint,
+            consent_token: None,
             actions_executed: executed_actions,
             proposed_actions,
             executed_action_events,

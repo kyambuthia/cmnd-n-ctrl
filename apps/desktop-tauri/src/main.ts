@@ -30,6 +30,7 @@ let lastChatContext = null;
 let pendingConsent = null;
 let consentApprovalArmed = false;
 let pendingConsentFingerprint = null;
+let pendingConsentToken = null;
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -207,6 +208,7 @@ function normalizeExecutedActionEvents(result) {
 function clearConsent() {
   pendingConsent = null;
   pendingConsentFingerprint = null;
+  pendingConsentToken = null;
   consentApprovalArmed = false;
   consentCardEl.classList.add('hidden');
   consentRequestedEl.innerHTML = '';
@@ -217,9 +219,10 @@ function clearConsent() {
   approveConsentBtn.classList.remove('secondary');
 }
 
-function showConsent(requests, requestFingerprint) {
+function showConsent(requests, requestFingerprint, consentToken) {
   pendingConsent = requests;
   pendingConsentFingerprint = requestFingerprint || null;
+  pendingConsentToken = consentToken || null;
   consentApprovalArmed = false;
   consentCardEl.classList.remove('hidden');
   consentSummaryEl.textContent =
@@ -278,6 +281,7 @@ function parsePendingConsent(actions) {
 
 function renderChatResult(result) {
   const requestFingerprint = result.request_fingerprint || 'unknown';
+  const consentToken = result.consent_token || null;
   const proposedActions = normalizeProposedActions(result);
   const executedActionEvents = normalizeExecutedActionEvents(result);
   const actionEvents = normalizeActionEvents(result);
@@ -290,7 +294,7 @@ function renderChatResult(result) {
 
   const pending = parsePendingConsent(proposedActions);
   if (pending.length > 0) {
-    showConsent(pending, requestFingerprint);
+    showConsent(pending, requestFingerprint, consentToken);
     setCurrentAction(
       'consent',
       'Consent Required',
@@ -407,7 +411,7 @@ async function runToolsList() {
 }
 
 async function approvePendingConsent() {
-  if (!pendingConsent || !lastChatContext) {
+  if (!pendingConsent || (!pendingConsentToken && !lastChatContext)) {
     setStatus('No pending consent request');
     return;
   }
@@ -434,13 +438,19 @@ async function approvePendingConsent() {
   );
   pushHistory('ok', 'User Approved', pendingConsent.map((p) => p.toolName).join(', '));
   clearConsent();
-  setStatus('Re-running request with one-time approval...');
+  setStatus(
+    pendingConsentToken
+      ? 'Sending chat.approve...'
+      : 'Re-running request with one-time approval...',
+  );
 
-  const json = await callJsonRpc('chat.request', {
-    messages: [{ role: 'user', content: lastChatContext.prompt }],
-    provider_config: lastChatContext.providerConfig,
-    mode: 'BestEffort',
-  });
+  const json = pendingConsentToken
+    ? await callJsonRpc('chat.approve', { consent_token: pendingConsentToken })
+    : await callJsonRpc('chat.request', {
+        messages: [{ role: 'user', content: lastChatContext.prompt }],
+        provider_config: lastChatContext.providerConfig,
+        mode: 'BestEffort',
+      });
   renderJsonRpcResponse(json);
 }
 

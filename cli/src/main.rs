@@ -136,6 +136,9 @@ fn main() {
             } else {
                 println!("audit_id: {}", response.audit_id);
                 println!("request_fingerprint: {}", response.request_fingerprint);
+                if let Some(consent_token) = &response.consent_token {
+                    println!("consent_token: {}", consent_token);
+                }
                 println!("actions: {}", response.actions_executed.join(", "));
                 if !response.proposed_actions.is_empty() {
                     println!("proposed_actions:");

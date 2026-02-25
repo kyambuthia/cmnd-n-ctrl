@@ -58,6 +58,11 @@ pub struct ChatRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatApproveRequest {
+    pub consent_token: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionEvent {
     pub tool_name: String,
     pub capability_tier: String,
@@ -72,6 +77,7 @@ pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
     pub request_fingerprint: String,
+    pub consent_token: Option<String>,
     pub actions_executed: Vec<String>,
     pub proposed_actions: Vec<ActionEvent>,
     pub executed_action_events: Vec<ActionEvent>,
@@ -80,6 +86,7 @@ pub struct ChatResponse {
 
 pub trait ChatService {
     fn chat_request(&mut self, params: ChatRequest) -> ChatResponse;
+    fn chat_approve(&mut self, params: ChatApproveRequest) -> Result<ChatResponse, String>;
     fn tools_list(&self) -> Vec<Tool>;
 }
 
@@ -112,6 +119,20 @@ where
                     Err(err) => Response::error(request.id, -32602, format!("invalid params: {err}")),
                 }
             }
+            "chat.approve" => {
+                match serde_json::from_str::<ChatApproveRequest>(&request.params_json) {
+                    Ok(params) => match self.service.chat_approve(params) {
+                        Ok(response) => match serde_json::to_string(&response) {
+                            Ok(payload) => Response::success(request.id, payload),
+                            Err(err) => {
+                                Response::error(request.id, -32603, format!("serialization error: {err}"))
+                            }
+                        },
+                        Err(err) => Response::error(request.id, -32000, err),
+                    },
+                    Err(err) => Response::error(request.id, -32602, format!("invalid params: {err}")),
+                }
+            }
             _ => Response::error(request.id, -32601, "method not found"),
         }
     }
@@ -139,6 +160,10 @@ where
 
     pub fn chat_request(&mut self, params: ChatRequest) -> ChatResponse {
         self.server.service_mut().chat_request(params)
+    }
+
+    pub fn chat_approve(&mut self, params: ChatApproveRequest) -> Result<ChatResponse, String> {
+        self.server.service_mut().chat_approve(params)
     }
 
     pub fn tools_list(&mut self) -> Vec<Tool> {
