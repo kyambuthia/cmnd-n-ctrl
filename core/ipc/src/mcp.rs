@@ -1,9 +1,9 @@
 pub fn encode_stdio_frame(payload: &str) -> String {
-    format!("Content-Length: {}\\r\\n\\r\\n{}", payload.len(), payload)
+    format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload)
 }
 
 pub fn decode_stdio_frame(input: &str) -> Option<String> {
-    let (header, body) = input.split_once("\\r\\n\\r\\n")?;
+    let (header, body) = input.split_once("\r\n\r\n")?;
     let len_line = header
         .lines()
         .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))?;
