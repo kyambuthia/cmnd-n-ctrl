@@ -3,5 +3,7 @@ name = "desktop-tauri-backend"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [dependencies]
 # TODO: add Tauri v2 dependencies, e.g. tauri = { version = "2", features = [] }
