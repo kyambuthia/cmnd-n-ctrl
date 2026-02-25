@@ -12,10 +12,14 @@ on:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check desktop backend scaffold (Windows/Linux)
+        run: cargo check --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
       - name: Scaffold note
-        run: |
-          echo "Tauri v2 workflow scaffold only."
-          echo "Add Node/Tauri toolchain steps when desktop app backend/frontend is wired."
+        run: echo "Full Tauri bundling intentionally omitted in scaffold CI."
