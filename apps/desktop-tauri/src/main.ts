@@ -5,7 +5,9 @@ const actionsEl = document.querySelector('#actions');
 const actionChipsEl = document.querySelector('#actionChips');
 const rawEl = document.querySelector('#raw');
 const statusEl = document.querySelector('#status');
+const shellEl = document.querySelector('.shell');
 const transportBadgeEl = document.querySelector('#transportBadge');
+const debugToggleBtn = document.querySelector('#debugToggle');
 const requireConfirmationEl = document.querySelector('#requireConfirmation');
 const sendBtn = document.querySelector('#send');
 const listToolsBtn = document.querySelector('#listTools');
@@ -185,7 +187,6 @@ async function callJsonRpc(method, params) {
 async function runChatRequest(modeOverride) {
   resetPanelsForRequest();
   const prompt = (promptEl.value || '').trim();
-  appendActivity('event', 'Request Sent', prompt || '(empty prompt)');
   setStatus('Sending chat.request...');
 
   lastChatContext = {
@@ -203,7 +204,6 @@ async function runChatRequest(modeOverride) {
 
 async function runToolsList() {
   resetPanelsForRequest();
-  appendActivity('event', 'Request Sent', 'tools.list');
   setStatus('Requesting tools.list...');
   const json = await callJsonRpc('tools.list', {});
   renderJsonRpcResponse(json);
@@ -347,6 +347,12 @@ presetButtons.forEach((button) => {
     promptEl.focus();
     setStatus('Preset loaded');
   });
+});
+
+debugToggleBtn.addEventListener('click', () => {
+  const isOpen = shellEl.classList.toggle('debug-open');
+  debugToggleBtn.setAttribute('aria-pressed', String(isOpen));
+  debugToggleBtn.textContent = isOpen ? 'Debug On' : 'Debug';
 });
 
 promptEl.addEventListener('keydown', async (event) => {
