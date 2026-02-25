@@ -21,6 +21,9 @@ Minimal Tauri v2 shell with a TypeScript UI that talks to the local JSON-RPC end
 1. Install dependencies:
    - `cd apps/desktop-tauri`
    - `npm install`
+   - Linux host packages (Debian/Ubuntu, required for Tauri/WebKitGTK build):
+     - `sudo apt-get update`
+     - `sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev`
 2. Start frontend static server (Terminal 1):
    - `npm run dev`
 3. Start Tauri shell (Terminal 2):
@@ -30,6 +33,7 @@ Minimal Tauri v2 shell with a TypeScript UI that talks to the local JSON-RPC end
 Notes:
 - The feature-gated Tauri backend registers a real `jsonrpc_request` command and manages a local CLI backend bridge.
 - The frontend already prefers `invoke('jsonrpc_request')` when running under Tauri and falls back to HTTP in browser/dev mode.
+- If Linux build fails with `gdk-3.0` / `pkg-config` errors, the GTK3/WebKitGTK development packages above are missing.
 
 ## Backend Bridge Env (src-tauri)
 - `CMND_N_CTRL_BACKEND_ADDR` (default `127.0.0.1:7777`)
