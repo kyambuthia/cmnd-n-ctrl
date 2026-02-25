@@ -174,14 +174,21 @@ function escapeHtml(value) {
 }
 
 function detectTransport() {
-  if (isTauriRuntime()) {
-    transportBadgeEl.textContent = 'transport: tauri (stub)';
+  const tauriInvoke = getTauriInvoke();
+  if (tauriInvoke) {
+    transportBadgeEl.textContent = 'transport: tauri-bridge';
     return {
-      name: 'tauri-stub',
+      name: 'tauri-bridge',
       async callJsonRpc(payload) {
-        // Placeholder for future Tauri-native bridge.
-        // Intended shape: invoke('jsonrpc_request', { payload })
-        throw new Error(`Tauri transport not wired yet for method ${payload.method}`);
+        // Expected Tauri backend command contract:
+        // invoke('jsonrpc_request', { payloadJson: JSON.stringify(payload) }) -> JSON string/object
+        const result = await tauriInvoke('jsonrpc_request', {
+          payloadJson: JSON.stringify(payload),
+        });
+        if (typeof result === 'string') {
+          return JSON.parse(result);
+        }
+        return result;
       },
     };
   }
@@ -205,6 +212,20 @@ function detectTransport() {
 
 function isTauriRuntime() {
   return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__ || window.__TAURI_IPC__);
+}
+
+function getTauriInvoke() {
+  const tauri = window.__TAURI__;
+  if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+    return tauri.core.invoke.bind(tauri.core);
+  }
+
+  const internals = window.__TAURI_INTERNALS__;
+  if (internals && typeof internals.invoke === 'function') {
+    return internals.invoke.bind(internals);
+  }
+
+  return null;
 }
 
 transport = detectTransport();
