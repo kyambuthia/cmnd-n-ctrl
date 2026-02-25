@@ -3,6 +3,8 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+#[cfg(feature = "tauri-app")]
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -167,6 +169,41 @@ fn jsonrpc_request_command(
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "tauri-app")]
+struct TauriBridgeState {
+    manager: Mutex<BackendProcessManager>,
+}
+
+#[cfg(feature = "tauri-app")]
+impl Default for TauriBridgeState {
+    fn default() -> Self {
+        Self {
+            manager: Mutex::new(BackendProcessManager::default()),
+        }
+    }
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn jsonrpc_request(
+    state: tauri::State<'_, TauriBridgeState>,
+    payload_json: String,
+) -> Result<String, String> {
+    let mut guard = state
+        .manager
+        .lock()
+        .map_err(|_| "backend bridge mutex poisoned".to_string())?;
+    jsonrpc_request_command(&mut guard, payload_json)
+}
+
+#[cfg(feature = "tauri-app")]
+fn tauri_integration_contract() {
+    let _builder = tauri::Builder::default()
+        .manage(TauriBridgeState::default())
+        .invoke_handler(tauri::generate_handler![jsonrpc_request]);
+}
+
+#[cfg(not(feature = "tauri-app"))]
 fn main() {
     // Compile-safe bridge binary for eventual Tauri v2 integration.
     // Planned next step:
@@ -184,6 +221,12 @@ fn main() {
             println!("desktop bridge initialized (backend unavailable)");
         }
     }
+}
+
+#[cfg(feature = "tauri-app")]
+fn main() {
+    tauri_integration_contract();
+    println!("desktop bridge tauri-app feature compiled (command registered in builder)");
 }
 
 #[cfg(test)]

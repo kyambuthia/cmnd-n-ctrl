@@ -5,5 +5,9 @@ edition = "2021"
 
 [workspace]
 
+[features]
+default = []
+tauri-app = ["dep:tauri"]
+
 [dependencies]
-# TODO: add Tauri v2 dependencies, e.g. tauri = { version = "2", features = [] }
+tauri = { version = "2", optional = true }
