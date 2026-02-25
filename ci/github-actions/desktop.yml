@@ -1,0 +1,21 @@
+name: Desktop Tauri (Scaffold)
+
+on:
+  push:
+    paths:
+      - 'apps/desktop-tauri/**'
+      - 'core/**'
+      - 'cli/**'
+  pull_request:
+    paths:
+      - 'apps/desktop-tauri/**'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scaffold note
+        run: |
+          echo "Tauri v2 workflow scaffold only."
+          echo "Add Node/Tauri toolchain steps when desktop app backend/frontend is wired."
