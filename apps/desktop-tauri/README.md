@@ -17,6 +17,20 @@ Minimal Tauri v2 shell with a TypeScript UI that talks to the local JSON-RPC end
 - In production, connect to a local IPC socket/pipe managed by the app backend.
 - The frontend currently demonstrates the UI and a fetch-based JSON-RPC call to the local HTTP JSON-RPC dev server.
 
+## Native Tauri Dev (WIP, Now Scaffolded)
+1. Install dependencies:
+   - `cd apps/desktop-tauri`
+   - `npm install`
+2. Start frontend static server (Terminal 1):
+   - `npm run dev`
+3. Start Tauri shell (Terminal 2):
+   - `cargo run --manifest-path src-tauri/Cargo.toml --features tauri-app` (compile/runtime scaffold)
+   - or `npm run tauri:dev` once Tauri toolchain prerequisites are installed
+
+Notes:
+- The feature-gated Tauri backend registers a real `jsonrpc_request` command and manages a local CLI backend bridge.
+- The frontend already prefers `invoke('jsonrpc_request')` when running under Tauri and falls back to HTTP in browser/dev mode.
+
 ## Backend Bridge Env (src-tauri)
 - `CMND_N_CTRL_BACKEND_ADDR` (default `127.0.0.1:7777`)
 - `CMND_N_CTRL_AUTOSPAWN_BACKEND=0` to disable child auto-spawn and require an already-running backend

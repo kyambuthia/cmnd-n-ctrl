@@ -9,5 +9,8 @@ edition = "2021"
 default = []
 tauri-app = ["dep:tauri"]
 
+[build-dependencies]
+tauri-build = { version = "2" }
+
 [dependencies]
 tauri = { version = "2", optional = true }
