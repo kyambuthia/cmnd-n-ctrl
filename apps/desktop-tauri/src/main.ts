@@ -19,6 +19,7 @@ const consentCardEl = document.querySelector('#consentCard');
 const consentSummaryEl = document.querySelector('#consentSummary');
 const consentRequestedEl = document.querySelector('#consentRequested');
 const consentDetailsEl = document.querySelector('#consentDetails');
+const consentScopeEl = document.querySelector('#consentScope');
 const approveConsentBtn = document.querySelector('#approveConsent');
 const denyConsentBtn = document.querySelector('#denyConsent');
 
@@ -26,6 +27,7 @@ const JSONRPC_URL = 'http://127.0.0.1:7777/jsonrpc';
 let transport = null;
 let lastChatContext = null;
 let pendingConsent = null;
+let consentApprovalArmed = false;
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -111,14 +113,19 @@ function riskChipClass(tier) {
 
 function clearConsent() {
   pendingConsent = null;
+  consentApprovalArmed = false;
   consentCardEl.classList.add('hidden');
   consentRequestedEl.innerHTML = '';
   consentDetailsEl.innerHTML = '';
   consentSummaryEl.textContent = 'The assistant requested an action that needs approval.';
+  consentScopeEl.textContent = 'Approval scope: once, for this exact request only.';
+  approveConsentBtn.textContent = 'Approve Once';
+  approveConsentBtn.classList.remove('secondary');
 }
 
 function showConsent(requests) {
   pendingConsent = requests;
+  consentApprovalArmed = false;
   consentCardEl.classList.remove('hidden');
   consentSummaryEl.textContent =
     requests.length === 1
@@ -127,6 +134,13 @@ function showConsent(requests) {
 
   consentRequestedEl.innerHTML = '';
   consentDetailsEl.innerHTML = '';
+  approveConsentBtn.textContent = requiresExtraConsentClick(requests)
+    ? 'Review Risk, Click Again to Approve'
+    : 'Approve Once';
+  approveConsentBtn.classList.toggle('secondary', requiresExtraConsentClick(requests));
+  consentScopeEl.textContent = requiresExtraConsentClick(requests)
+    ? 'Approval scope: once, for this exact request only. High-risk actions require a second confirmation click.'
+    : 'Approval scope: once, for this exact request only.';
 
   for (const req of requests) {
     const nameChip = document.createElement('span');
@@ -279,6 +293,20 @@ async function approvePendingConsent() {
     return;
   }
 
+  if (requiresExtraConsentClick(pendingConsent) && !consentApprovalArmed) {
+    consentApprovalArmed = true;
+    approveConsentBtn.textContent = 'Confirm Risky Action';
+    approveConsentBtn.classList.remove('secondary');
+    setStatus('High-risk action detected. Click approve again to confirm.');
+    setCurrentAction(
+      'consent',
+      'Confirm Risky Action',
+      pendingConsent.map((p) => `${p.toolName} (${p.riskTier})`).join('\n'),
+      ['consent', 'high-risk'],
+    );
+    return;
+  }
+
   setCurrentAction(
     'ok',
     'User Approved',
@@ -324,6 +352,12 @@ async function withUiBusy(action) {
 function actionToRiskTier(actionEntry) {
   const toolName = String(actionEntry).split(':')[0];
   return inferRiskTier(toolName);
+}
+
+function requiresExtraConsentClick(requests) {
+  return (Array.isArray(requests) ? requests : []).some(
+    (req) => req.riskTier === 'LocalActions' || req.riskTier === 'SystemActions',
+  );
 }
 
 function escapeHtml(value) {

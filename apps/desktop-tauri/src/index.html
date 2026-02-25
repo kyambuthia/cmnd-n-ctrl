@@ -177,6 +177,16 @@
       .hidden {
         display: none !important;
       }
+      .consent-scope {
+        margin-top: 0.6rem;
+        padding: 0.6rem 0.7rem;
+        border: 1px dashed rgba(242, 177, 52, 0.35);
+        border-radius: 10px;
+        color: var(--muted);
+        background: rgba(242, 177, 52, 0.04);
+        font-size: 0.84rem;
+        line-height: 1.35;
+      }
       .list {
         margin: 0;
         padding-left: 1rem;
@@ -369,6 +379,9 @@
                 <div id="consentSummary" class="message">The assistant requested an action that needs approval.</div>
                 <div id="consentRequested" class="chips" style="margin-top:0.6rem;"></div>
                 <div id="consentDetails" class="events" style="margin-top:0.6rem;"></div>
+                <div id="consentScope" class="consent-scope">
+                  Approval scope: once, for this exact request only.
+                </div>
                 <div class="row">
                   <button id="approveConsent" type="button">Approve Once</button>
                   <button id="denyConsent" class="secondary" type="button">Deny</button>
