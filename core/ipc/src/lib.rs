@@ -2,61 +2,62 @@ pub mod jsonrpc;
 pub mod mcp;
 
 use crate::jsonrpc::{Request, Response};
+use serde::{Deserialize, Serialize};
 
 pub type JsonBlob = String;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_json_schema: JsonBlob,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub name: String,
     pub arguments_json: JsonBlob,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
     pub summary: String,
     pub artifacts: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub name: String,
     pub result_json: JsonBlob,
     pub evidence: Evidence,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub provider_name: String,
     pub model: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChatMode {
     RequireConfirmation,
     BestEffort,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub provider_config: ProviderConfig,
     pub mode: ChatMode,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
@@ -83,20 +84,19 @@ where
     pub fn handle(&mut self, request: Request) -> Response {
         match request.method.as_str() {
             "tools.list" => {
-                let tools = self.service.tools_list();
-                let names = tools
-                    .into_iter()
-                    .map(|t| t.name)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                Response::success(request.id, format!("{{\"tools\":\"{}\"}}", names))
+                match serde_json::to_string(&self.service.tools_list()) {
+                    Ok(payload) => Response::success(request.id, payload),
+                    Err(err) => Response::error(request.id, -32603, format!("serialization error: {err}")),
+                }
             }
             "chat.request" => {
-                Response::error(
-                    request.id,
-                    -32602,
-                    "typed chat.request is available via JsonRpcClient::chat_request in this scaffold",
-                )
+                match serde_json::from_str::<ChatRequest>(&request.params_json) {
+                    Ok(params) => match serde_json::to_string(&self.service.chat_request(params)) {
+                        Ok(payload) => Response::success(request.id, payload),
+                        Err(err) => Response::error(request.id, -32603, format!("serialization error: {err}")),
+                    },
+                    Err(err) => Response::error(request.id, -32602, format!("invalid params: {err}")),
+                }
             }
             _ => Response::error(request.id, -32601, "method not found"),
         }
