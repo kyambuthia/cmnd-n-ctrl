@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.cmndnctrl.desktop",
   "build": {
-    "beforeDevCommand": "",
+    "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "",
     "devUrl": "http://127.0.0.1:8080",
     "frontendDist": "../src"
