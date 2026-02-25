@@ -5,7 +5,7 @@ on:
     paths:
       - 'core/**'
       - 'cli/**'
-      - '.github/workflows/**'
+      - 'ci/github-actions/**'
   pull_request:
     paths:
       - 'core/**'
@@ -13,7 +13,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: core
@@ -22,6 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Check workspace
         run: cargo check --workspace
+      - name: Test workspace
+        run: cargo test --workspace
       - name: Test core crates
         run: cargo test -p agent -p ipc -p providers -p actions -p plugins
       - name: CLI help
