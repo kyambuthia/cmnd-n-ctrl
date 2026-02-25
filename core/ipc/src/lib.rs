@@ -78,11 +78,20 @@ pub struct ActionEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsentRequest {
+    pub scope: String,
+    pub human_summary: String,
+    pub risk_factors: Vec<String>,
+    pub requires_extra_confirmation_click: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
     pub request_fingerprint: String,
     pub consent_token: Option<String>,
+    pub consent_request: Option<ConsentRequest>,
     pub actions_executed: Vec<String>,
     pub proposed_actions: Vec<ActionEvent>,
     pub executed_action_events: Vec<ActionEvent>,

@@ -3,7 +3,7 @@ pub mod policy;
 pub mod tool_registry;
 
 use actions::traits::StubActionBackend;
-use ipc::{ChatApproveRequest, ChatDenyRequest, ChatRequest, ChatResponse, ChatService, Tool};
+use ipc::{ActionEvent, ChatApproveRequest, ChatDenyRequest, ChatRequest, ChatResponse, ChatService, ConsentRequest, Tool};
 use providers::ProviderChoice;
 use std::collections::HashMap;
 
@@ -72,6 +72,7 @@ impl ChatService for AgentService {
             .any(|evt| evt.status == "consent_required")
         {
             response.consent_token = Some(self.issue_consent_token(params));
+            response.consent_request = Some(build_consent_request(&response.proposed_actions));
         }
         response
     }
@@ -114,6 +115,7 @@ impl ChatService for AgentService {
         if denied_any {
             response.final_text = "User denied consent for requested actions.".to_string();
             response.consent_token = None;
+            response.consent_request = None;
             response.actions_executed = response
                 .proposed_actions
                 .iter()
@@ -136,5 +138,53 @@ impl ChatService for AgentService {
 
     fn tools_list(&self) -> Vec<Tool> {
         self.tool_registry.list()
+    }
+}
+
+fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
+    let pending: Vec<&ActionEvent> = proposed_actions
+        .iter()
+        .filter(|evt| evt.status == "consent_required")
+        .collect();
+    let requires_extra_confirmation_click = pending.iter().any(|evt| {
+        matches!(
+            evt.capability_tier.as_str(),
+            "LocalActions" | "SystemActions"
+        )
+    });
+
+    let mut risk_factors = Vec::new();
+    if pending.iter().any(|evt| evt.capability_tier == "LocalActions") {
+        risk_factors.push("local_device_action".to_string());
+    }
+    if pending.iter().any(|evt| evt.capability_tier == "SystemActions") {
+        risk_factors.push("system_level_action".to_string());
+    }
+    if pending.len() > 1 {
+        risk_factors.push("multiple_actions_requested".to_string());
+    }
+    if pending.iter().any(|evt| evt.arguments_preview.as_deref().map(|s| s.len()).unwrap_or(0) > 0) {
+        risk_factors.push("external_arguments_present".to_string());
+    }
+
+    let human_summary = if pending.is_empty() {
+        "No consent-required actions pending.".to_string()
+    } else if pending.len() == 1 {
+        format!(
+            "Approve execution of '{}' once for this exact request.",
+            pending[0].tool_name
+        )
+    } else {
+        format!(
+            "Approve execution of {} actions once for this exact request.",
+            pending.len()
+        )
+    };
+
+    ConsentRequest {
+        scope: "once_exact_request".to_string(),
+        human_summary,
+        risk_factors,
+        requires_extra_confirmation_click,
     }
 }

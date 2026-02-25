@@ -31,6 +31,7 @@ let pendingConsent = null;
 let consentApprovalArmed = false;
 let pendingConsentFingerprint = null;
 let pendingConsentToken = null;
+let pendingConsentMeta = null;
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -209,6 +210,7 @@ function clearConsent() {
   pendingConsent = null;
   pendingConsentFingerprint = null;
   pendingConsentToken = null;
+  pendingConsentMeta = null;
   consentApprovalArmed = false;
   consentCardEl.classList.add('hidden');
   consentRequestedEl.innerHTML = '';
@@ -219,26 +221,36 @@ function clearConsent() {
   approveConsentBtn.classList.remove('secondary');
 }
 
-function showConsent(requests, requestFingerprint, consentToken) {
+function showConsent(requests, requestFingerprint, consentToken, consentRequestMeta) {
   pendingConsent = requests;
   pendingConsentFingerprint = requestFingerprint || null;
   pendingConsentToken = consentToken || null;
+  pendingConsentMeta = consentRequestMeta || null;
   consentApprovalArmed = false;
   consentCardEl.classList.remove('hidden');
   consentSummaryEl.textContent =
-    requests.length === 1
-      ? `Approve execution of ${requests[0].toolName}?`
-      : `Approve execution of ${requests.length} requested actions?`;
+    (consentRequestMeta && consentRequestMeta.human_summary)
+      || (requests.length === 1
+        ? `Approve execution of ${requests[0].toolName}?`
+        : `Approve execution of ${requests.length} requested actions?`);
 
   consentRequestedEl.innerHTML = '';
   consentDetailsEl.innerHTML = '';
-  approveConsentBtn.textContent = requiresExtraConsentClick(requests)
+  approveConsentBtn.textContent = requiresExtraConsentClick(requests, consentRequestMeta)
     ? 'Review Risk, Click Again to Approve'
     : 'Approve Once';
-  approveConsentBtn.classList.toggle('secondary', requiresExtraConsentClick(requests));
-  consentScopeEl.textContent = requiresExtraConsentClick(requests)
-    ? `Approval scope: once, for this exact request only (${requestFingerprint || 'unknown'}). High-risk actions require a second confirmation click.`
-    : `Approval scope: once, for this exact request only (${requestFingerprint || 'unknown'}).`;
+  approveConsentBtn.classList.toggle('secondary', requiresExtraConsentClick(requests, consentRequestMeta));
+  const scopeLabel =
+    consentRequestMeta && consentRequestMeta.scope
+      ? String(consentRequestMeta.scope).replaceAll('_', ' ')
+      : 'once, for this exact request only';
+  const extraClick = requiresExtraConsentClick(requests, consentRequestMeta);
+  const riskFactors = Array.isArray(consentRequestMeta && consentRequestMeta.risk_factors)
+    ? consentRequestMeta.risk_factors
+    : [];
+  consentScopeEl.textContent = extraClick
+    ? `Approval scope: ${scopeLabel} (${requestFingerprint || 'unknown'}). High-risk actions require a second confirmation click.${riskFactors.length ? ` Risks: ${riskFactors.join(', ')}` : ''}`
+    : `Approval scope: ${scopeLabel} (${requestFingerprint || 'unknown'}).${riskFactors.length ? ` Risks: ${riskFactors.join(', ')}` : ''}`;
 
   for (const req of requests) {
     const nameChip = document.createElement('span');
@@ -282,6 +294,10 @@ function parsePendingConsent(actions) {
 function renderChatResult(result) {
   const requestFingerprint = result.request_fingerprint || 'unknown';
   const consentToken = result.consent_token || null;
+  const consentRequestMeta =
+    result && result.consent_request && typeof result.consent_request === 'object'
+      ? result.consent_request
+      : null;
   const proposedActions = normalizeProposedActions(result);
   const executedActionEvents = normalizeExecutedActionEvents(result);
   const actionEvents = normalizeActionEvents(result);
@@ -294,7 +310,7 @@ function renderChatResult(result) {
 
   const pending = parsePendingConsent(proposedActions);
   if (pending.length > 0) {
-    showConsent(pending, requestFingerprint, consentToken);
+    showConsent(pending, requestFingerprint, consentToken, consentRequestMeta);
     setCurrentAction(
       'consent',
       'Consent Required',
@@ -416,7 +432,7 @@ async function approvePendingConsent() {
     return;
   }
 
-  if (requiresExtraConsentClick(pendingConsent) && !consentApprovalArmed) {
+  if (requiresExtraConsentClick(pendingConsent, pendingConsentMeta) && !consentApprovalArmed) {
     consentApprovalArmed = true;
     approveConsentBtn.textContent = 'Confirm Risky Action';
     approveConsentBtn.classList.remove('secondary');
@@ -478,7 +494,10 @@ async function withUiBusy(action) {
   }
 }
 
-function requiresExtraConsentClick(requests) {
+function requiresExtraConsentClick(requests, consentMeta) {
+  if (consentMeta && typeof consentMeta.requires_extra_confirmation_click === 'boolean') {
+    return consentMeta.requires_extra_confirmation_click;
+  }
   return (Array.isArray(requests) ? requests : []).some(
     (req) => req.riskTier === 'LocalActions' || req.riskTier === 'SystemActions',
   );

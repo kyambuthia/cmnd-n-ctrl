@@ -401,6 +401,17 @@ fn print_chat_response(response: &ChatResponse, json_output: bool) {
     if let Some(consent_token) = &response.consent_token {
         println!("consent_token: {}", consent_token);
     }
+    if let Some(consent) = &response.consent_request {
+        println!("consent.scope: {}", consent.scope);
+        println!("consent.summary: {}", consent.human_summary);
+        println!(
+            "consent.requires_extra_confirmation_click: {}",
+            consent.requires_extra_confirmation_click
+        );
+        if !consent.risk_factors.is_empty() {
+            println!("consent.risk_factors: {}", consent.risk_factors.join(", "));
+        }
+    }
     println!("actions: {}", response.actions_executed.join(", "));
     if !response.proposed_actions.is_empty() {
         println!("proposed_actions:");
