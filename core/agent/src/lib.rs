@@ -3,7 +3,7 @@ pub mod policy;
 pub mod tool_registry;
 
 use actions::traits::StubActionBackend;
-use ipc::{ChatApproveRequest, ChatRequest, ChatResponse, ChatService, Tool};
+use ipc::{ChatApproveRequest, ChatDenyRequest, ChatRequest, ChatResponse, ChatService, Tool};
 use providers::ProviderChoice;
 use std::collections::HashMap;
 
@@ -16,6 +16,7 @@ pub struct AgentService {
     tool_registry: ToolRegistry,
     pending_approvals: HashMap<String, ChatRequest>,
     consent_counter: u64,
+    synthetic_audit_counter: u64,
 }
 
 impl AgentService {
@@ -32,6 +33,7 @@ impl AgentService {
             tool_registry,
             pending_approvals: HashMap::new(),
             consent_counter: 0,
+            synthetic_audit_counter: 0,
         }
     }
 
@@ -50,6 +52,11 @@ impl AgentService {
         let token = format!("consent-{:06}", self.consent_counter);
         self.pending_approvals.insert(token.clone(), request);
         token
+    }
+
+    fn next_synthetic_audit_id(&mut self) -> String {
+        self.synthetic_audit_counter += 1;
+        format!("audit-local-{:06}", self.synthetic_audit_counter)
     }
 }
 
@@ -81,6 +88,50 @@ impl ChatService for AgentService {
             request.mode,
             true,
         ))
+    }
+
+    fn chat_deny(&mut self, params: ChatDenyRequest) -> Result<ChatResponse, String> {
+        let request = self
+            .pending_approvals
+            .remove(&params.consent_token)
+            .ok_or_else(|| "unknown or expired consent_token".to_string())?;
+
+        self.rebuild_orchestrator(&request.provider_config.provider_name);
+        let mut response = self
+            .orchestrator
+            .run(request.messages.clone(), request.provider_config.clone(), request.mode.clone());
+
+        let mut denied_any = false;
+        for evt in &mut response.proposed_actions {
+            if evt.status == "consent_required" {
+                evt.status = "denied".to_string();
+                if evt.reason.is_none() {
+                    evt.reason = Some("Denied by user".to_string());
+                }
+                denied_any = true;
+            }
+        }
+        if denied_any {
+            response.final_text = "User denied consent for requested actions.".to_string();
+            response.consent_token = None;
+            response.actions_executed = response
+                .proposed_actions
+                .iter()
+                .filter(|evt| evt.status == "denied")
+                .map(|evt| {
+                    format!(
+                        "denied:{}:{}",
+                        evt.tool_name,
+                        evt.reason.clone().unwrap_or_else(|| "Denied by user".to_string())
+                    )
+                })
+                .collect();
+            response.executed_action_events.clear();
+            response.action_events = response.proposed_actions.clone();
+            response.audit_id = self.next_synthetic_audit_id();
+        }
+
+        Ok(response)
     }
 
     fn tools_list(&self) -> Vec<Tool> {

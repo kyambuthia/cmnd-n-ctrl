@@ -561,7 +561,7 @@ approveConsentBtn.addEventListener('click', async () => {
   await withUiBusy(approvePendingConsent);
 });
 
-denyConsentBtn.addEventListener('click', () => {
+denyConsentBtn.addEventListener('click', async () => {
   if (pendingConsent) {
     setCurrentAction(
       'warn',
@@ -571,7 +571,18 @@ denyConsentBtn.addEventListener('click', () => {
     );
     pushHistory('warn', 'User Denied', pendingConsent.map((p) => p.toolName).join(', '));
   }
+  const consentToken = pendingConsentToken;
   clearConsent();
+
+  if (consentToken) {
+    await withUiBusy(async () => {
+      setStatus('Sending chat.deny...');
+      const json = await callJsonRpc('chat.deny', { consent_token: consentToken });
+      renderJsonRpcResponse(json);
+    });
+    return;
+  }
+
   setStatus('Consent denied');
 });
 
