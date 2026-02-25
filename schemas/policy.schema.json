@@ -16,7 +16,12 @@
         "required": ["tool_name", "capability_tier", "authorization"],
         "properties": {
           "tool_name": { "type": "string" },
-          "capability_tier": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "capability_tier": {
+            "oneOf": [
+              { "type": "integer", "minimum": 0, "maximum": 3 },
+              { "type": "string", "enum": ["ReadOnly", "LocalActions", "SystemActions"] }
+            ]
+          },
           "authorization": {
             "type": "string",
             "enum": ["deny", "allow", "confirm"]
