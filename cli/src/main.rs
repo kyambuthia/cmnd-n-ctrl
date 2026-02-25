@@ -135,6 +135,7 @@ fn main() {
                 );
             } else {
                 println!("audit_id: {}", response.audit_id);
+                println!("request_fingerprint: {}", response.request_fingerprint);
                 println!("actions: {}", response.actions_executed.join(", "));
                 if !response.proposed_actions.is_empty() {
                     println!("proposed_actions:");
@@ -146,6 +147,9 @@ fn main() {
                         if let Some(reason) = &evt.reason {
                             line.push_str(&format!(" reason={}", reason));
                         }
+                        if let Some(args) = &evt.arguments_preview {
+                            line.push_str(&format!(" args={}", args));
+                        }
                         println!("{line}");
                     }
                 }
@@ -156,6 +160,9 @@ fn main() {
                             "  - {} [{}] {}",
                             evt.tool_name, evt.capability_tier, evt.status
                         );
+                        if let Some(args) = &evt.arguments_preview {
+                            line.push_str(&format!(" args={}", args));
+                        }
                         if let Some(evidence) = &evt.evidence_summary {
                             line.push_str(&format!(" evidence={}", evidence));
                         }
@@ -171,6 +178,9 @@ fn main() {
                         );
                         if let Some(reason) = &evt.reason {
                             line.push_str(&format!(" reason={}", reason));
+                        }
+                        if let Some(args) = &evt.arguments_preview {
+                            line.push_str(&format!(" args={}", args));
                         }
                         if let Some(evidence) = &evt.evidence_summary {
                             line.push_str(&format!(" evidence={}", evidence));

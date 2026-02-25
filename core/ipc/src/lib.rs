@@ -63,6 +63,7 @@ pub struct ActionEvent {
     pub capability_tier: String,
     pub status: String,
     pub reason: Option<String>,
+    pub arguments_preview: Option<String>,
     pub evidence_summary: Option<String>,
 }
 
@@ -70,6 +71,7 @@ pub struct ActionEvent {
 pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
+    pub request_fingerprint: String,
     pub actions_executed: Vec<String>,
     pub proposed_actions: Vec<ActionEvent>,
     pub executed_action_events: Vec<ActionEvent>,

@@ -1,6 +1,8 @@
 use actions::traits::ActionBackend;
 use ipc::{ActionEvent, ChatMessage, ChatMode, ChatResponse, ProviderConfig, ToolResult};
 use providers::provider_trait::{Provider, ProviderReply};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::policy::{Authorization, CapabilityTier, Policy, PolicyContext};
@@ -89,6 +91,7 @@ where
         mode: ChatMode,
     ) -> ChatResponse {
         let audit_id = self.next_audit_id();
+        let request_fingerprint = request_fingerprint(&messages, &provider_config, &mode);
         let timestamp_unix_seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -115,6 +118,7 @@ where
                             capability_tier: capability_tier_label(&CapabilityTier::SystemActions),
                             status: "denied".to_string(),
                             reason: Some("unknown_tool".to_string()),
+                            arguments_preview: Some(arguments_preview(&call.arguments_json)),
                             evidence_summary: None,
                         });
                         policy_decisions.push(PolicyDecisionRecord {
@@ -140,6 +144,7 @@ where
                                 capability_tier: capability_tier_label(&tier),
                                 status: "approved".to_string(),
                                 reason: None,
+                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
                                 evidence_summary: None,
                             });
                             let result = self.action_backend.execute_tool(&call);
@@ -150,6 +155,7 @@ where
                                 capability_tier: capability_tier_label(&tier),
                                 status: "executed".to_string(),
                                 reason: None,
+                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
                                 evidence_summary: Some(evidence_summary),
                             });
                             policy_decisions.push(PolicyDecisionRecord {
@@ -167,6 +173,7 @@ where
                                 capability_tier: capability_tier_label(&tier),
                                 status: "consent_required".to_string(),
                                 reason: Some(reason.clone()),
+                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
                                 evidence_summary: None,
                             });
                             policy_decisions.push(PolicyDecisionRecord {
@@ -183,6 +190,7 @@ where
                                 capability_tier: capability_tier_label(&tier),
                                 status: "denied".to_string(),
                                 reason: Some(reason.clone()),
+                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
                                 evidence_summary: None,
                             });
                             policy_decisions.push(PolicyDecisionRecord {
@@ -225,6 +233,7 @@ where
         ChatResponse {
             final_text,
             audit_id,
+            request_fingerprint,
             actions_executed: executed_actions,
             proposed_actions,
             executed_action_events,
@@ -249,4 +258,31 @@ fn capability_tier_label(tier: &CapabilityTier) -> String {
         CapabilityTier::SystemActions => "SystemActions",
     }
     .to_string()
+}
+
+fn arguments_preview(arguments_json: &str) -> String {
+    const MAX_CHARS: usize = 180;
+    let compact = arguments_json.replace('\n', " ").replace('\r', " ");
+    let mut chars = compact.chars();
+    let preview: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
+}
+
+fn request_fingerprint(messages: &[ChatMessage], provider_config: &ProviderConfig, mode: &ChatMode) -> String {
+    let mut hasher = DefaultHasher::new();
+    provider_config.provider_name.hash(&mut hasher);
+    provider_config.model.hash(&mut hasher);
+    match mode {
+        ChatMode::RequireConfirmation => "RequireConfirmation".hash(&mut hasher),
+        ChatMode::BestEffort => "BestEffort".hash(&mut hasher),
+    }
+    for message in messages {
+        message.role.hash(&mut hasher);
+        message.content.hash(&mut hasher);
+    }
+    format!("req-{:016x}", hasher.finish())
 }

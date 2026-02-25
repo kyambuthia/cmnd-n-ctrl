@@ -29,6 +29,7 @@ let transport = null;
 let lastChatContext = null;
 let pendingConsent = null;
 let consentApprovalArmed = false;
+let pendingConsentFingerprint = null;
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -126,6 +127,7 @@ function legacyEntryToActionEvent(entry) {
       capability_tier: inferRiskTier(tool),
       status: 'consent_required',
       reason: reasonParts.join(':') || 'Approval required',
+      arguments_preview: null,
       evidence_summary: null,
     };
   }
@@ -137,6 +139,7 @@ function legacyEntryToActionEvent(entry) {
       capability_tier: inferRiskTier(tool),
       status: 'denied',
       reason: reasonParts.join(':') || 'Denied',
+      arguments_preview: null,
       evidence_summary: null,
     };
   }
@@ -145,6 +148,7 @@ function legacyEntryToActionEvent(entry) {
     capability_tier: inferRiskTier(text),
     status: 'executed',
     reason: null,
+    arguments_preview: null,
     evidence_summary: null,
   };
 }
@@ -157,6 +161,7 @@ function normalizeActionEvents(result) {
       capability_tier: normalizeTier(evt.capability_tier),
       status: evt.status || 'unknown',
       reason: evt.reason || null,
+      arguments_preview: evt.arguments_preview || null,
       evidence_summary: evt.evidence_summary || null,
     }));
   }
@@ -172,6 +177,7 @@ function normalizeProposedActions(result) {
       capability_tier: normalizeTier(evt.capability_tier),
       status: evt.status || 'unknown',
       reason: evt.reason || null,
+      arguments_preview: evt.arguments_preview || null,
       evidence_summary: null,
     }));
   }
@@ -191,6 +197,7 @@ function normalizeExecutedActionEvents(result) {
       capability_tier: normalizeTier(evt.capability_tier),
       status: evt.status || 'executed',
       reason: evt.reason || null,
+      arguments_preview: evt.arguments_preview || null,
       evidence_summary: evt.evidence_summary || null,
     }));
   }
@@ -199,6 +206,7 @@ function normalizeExecutedActionEvents(result) {
 
 function clearConsent() {
   pendingConsent = null;
+  pendingConsentFingerprint = null;
   consentApprovalArmed = false;
   consentCardEl.classList.add('hidden');
   consentRequestedEl.innerHTML = '';
@@ -209,8 +217,9 @@ function clearConsent() {
   approveConsentBtn.classList.remove('secondary');
 }
 
-function showConsent(requests) {
+function showConsent(requests, requestFingerprint) {
   pendingConsent = requests;
+  pendingConsentFingerprint = requestFingerprint || null;
   consentApprovalArmed = false;
   consentCardEl.classList.remove('hidden');
   consentSummaryEl.textContent =
@@ -225,8 +234,8 @@ function showConsent(requests) {
     : 'Approve Once';
   approveConsentBtn.classList.toggle('secondary', requiresExtraConsentClick(requests));
   consentScopeEl.textContent = requiresExtraConsentClick(requests)
-    ? 'Approval scope: once, for this exact request only. High-risk actions require a second confirmation click.'
-    : 'Approval scope: once, for this exact request only.';
+    ? `Approval scope: once, for this exact request only (${requestFingerprint || 'unknown'}). High-risk actions require a second confirmation click.`
+    : `Approval scope: once, for this exact request only (${requestFingerprint || 'unknown'}).`;
 
   for (const req of requests) {
     const nameChip = document.createElement('span');
@@ -243,7 +252,7 @@ function showConsent(requests) {
     detail.className = 'event consent';
     detail.innerHTML = `
       <div class="label">${escapeHtml(req.toolName)}</div>
-      <div class="body">${escapeHtml(req.reason)}</div>
+      <div class="body">${escapeHtml(req.reason)}${req.argumentsPreview ? `\nArgs: ${escapeHtml(req.argumentsPreview)}` : ''}</div>
     `;
     consentDetailsEl.appendChild(detail);
   }
@@ -263,10 +272,12 @@ function parsePendingConsent(actions) {
       toolName: evt.tool_name || '(unknown)',
       reason: evt.reason || 'Approval required',
       riskTier: normalizeTier(evt.capability_tier),
+      argumentsPreview: evt.arguments_preview || null,
     }));
 }
 
 function renderChatResult(result) {
+  const requestFingerprint = result.request_fingerprint || 'unknown';
   const proposedActions = normalizeProposedActions(result);
   const executedActionEvents = normalizeExecutedActionEvents(result);
   const actionEvents = normalizeActionEvents(result);
@@ -279,12 +290,14 @@ function renderChatResult(result) {
 
   const pending = parsePendingConsent(proposedActions);
   if (pending.length > 0) {
-    showConsent(pending);
+    showConsent(pending, requestFingerprint);
     setCurrentAction(
       'consent',
       'Consent Required',
-      pending.map((p) => `${p.toolName}: ${p.reason}`).join('\n'),
-      pending.map((p) => p.riskTier),
+      pending
+        .map((p) => `${p.toolName}: ${p.reason}${p.argumentsPreview ? `\nArgs: ${p.argumentsPreview}` : ''}`)
+        .join('\n\n'),
+      ['consent', requestFingerprint, ...pending.map((p) => p.riskTier)],
     );
     pushHistory('consent', 'Consent Needed', pending.map((p) => p.toolName).join(', '));
     return;
@@ -408,7 +421,7 @@ async function approvePendingConsent() {
       'consent',
       'Confirm Risky Action',
       pendingConsent.map((p) => `${p.toolName} (${p.riskTier})`).join('\n'),
-      ['consent', 'high-risk'],
+      ['consent', 'high-risk', pendingConsentFingerprint || 'unknown'],
     );
     return;
   }
@@ -417,7 +430,7 @@ async function approvePendingConsent() {
     'ok',
     'User Approved',
     pendingConsent.map((p) => `${p.toolName} (${p.riskTier})`).join('\n'),
-    ['consent', 'approved'],
+    ['consent', 'approved', pendingConsentFingerprint || 'unknown'],
   );
   pushHistory('ok', 'User Approved', pendingConsent.map((p) => p.toolName).join(', '));
   clearConsent();
