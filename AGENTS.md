@@ -28,6 +28,7 @@
 - `project open|status`
 - `audit list|show`
 - `tui` (minimal terminal UI shell)
+  - TUI keys: `Tab` switch pane, `Enter` activate/send/approve, `n` new session, `x` delete session, `a` approve consent, `d` deny consent, `c` toggle confirmation mode, `r` refresh, `q` quit
 
 ## Consent Flow Test (End-to-End)
 - Start backend: `cargo run -p cli -- serve-http`

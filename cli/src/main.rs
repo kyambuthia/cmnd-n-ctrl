@@ -1,3 +1,5 @@
+mod tui;
+
 use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -51,7 +53,7 @@ fn print_help() {
     println!("  cli mcp servers list|add|rm|start|stop ...");
     println!("  cli project open|status ...");
     println!("  cli audit list|show ...");
-    println!("  cli tui   # minimal terminal UI");
+    println!("  cli tui   # interactive terminal UI (ratatui)");
     println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
     println!("  cli serve-http [--addr <host:port>]");
@@ -217,7 +219,7 @@ fn main() {
             handle_audit_command(&mut client, &args[1..]);
         }
         "tui" => {
-            if let Err(err) = run_minimal_tui(&mut client) {
+            if let Err(err) = tui::run(&mut client) {
                 eprintln!("tui error: {err}");
                 std::process::exit(1);
             }
@@ -751,18 +753,6 @@ fn handle_audit_command(client: &mut JsonRpcClient<AgentService>, args: &[String
         std::process::exit(1);
     });
     print_value(&result, json_output);
-}
-
-fn run_minimal_tui(client: &mut JsonRpcClient<AgentService>) -> Result<(), String> {
-    let sessions = backend_call_value(client, None, "sessions.list", json!({}))?;
-    let consents = backend_call_value(client, None, "consent.list", json!({ "status": "pending", "session_id": null }))?;
-    let audits = backend_call_value(client, None, "audit.list", json!({ "session_id": null, "limit": 10 }))?;
-    println!("cmnd-n-ctrl tui (minimal placeholder)");
-    println!("sessions: {}", sessions.as_array().map(|a| a.len()).unwrap_or(0));
-    println!("pending consents: {}", consents.as_array().map(|a| a.len()).unwrap_or(0));
-    println!("recent audits: {}", audits.as_array().map(|a| a.len()).unwrap_or(0));
-    println!("TODO: ratatui interactive panes (session/chat/approvals/audit).");
-    Ok(())
 }
 
 fn wire_result<T>(wire: WireResponse) -> Result<T, String>
