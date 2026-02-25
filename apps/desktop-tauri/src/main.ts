@@ -3,6 +3,39 @@ const responseEl = document.querySelector<HTMLDivElement>('#response')!;
 const requireConfirmationEl = document.querySelector<HTMLInputElement>('#requireConfirmation')!;
 const sendBtn = document.querySelector<HTMLButtonElement>('#send')!;
 
+type JsonRpcSuccess = {
+  jsonrpc: '2.0';
+  id: number | string | null;
+  result?: {
+    final_text?: string;
+    audit_id?: string;
+    actions_executed?: string[];
+  } | unknown;
+  error?: {
+    code: number;
+    message: string;
+  };
+};
+
+function renderJsonRpcResponse(payload: JsonRpcSuccess): string {
+  if (payload.error) {
+    return `JSON-RPC error ${payload.error.code}: ${payload.error.message}`;
+  }
+
+  const result = payload.result as JsonRpcSuccess['result'] | undefined;
+  if (result && typeof result === 'object' && result !== null && 'final_text' in result) {
+    const typed = result as { final_text?: string; audit_id?: string; actions_executed?: string[] };
+    const lines = [
+      `Response: ${typed.final_text ?? ''}`,
+      `Audit ID: ${typed.audit_id ?? 'n/a'}`,
+      `Actions: ${(typed.actions_executed ?? []).join(', ') || '(none)'}`,
+    ];
+    return lines.join('\n');
+  }
+
+  return JSON.stringify(payload.result, null, 2);
+}
+
 async function callLocalJsonRpc(prompt: string, requireConfirmation: boolean): Promise<string> {
   const payload = {
     jsonrpc: '2.0',
@@ -22,9 +55,14 @@ async function callLocalJsonRpc(prompt: string, requireConfirmation: boolean): P
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    return await resp.text();
+    if (!resp.ok) {
+      return `HTTP error ${resp.status}: ${await resp.text()}`;
+    }
+
+    const json = (await resp.json()) as JsonRpcSuccess;
+    return renderJsonRpcResponse(json);
   } catch {
-    return 'Local JSON-RPC endpoint not running. TODO: wire Tauri backend to spawn/connect to core IPC.';
+    return 'Local JSON-RPC endpoint not running. Start `cargo run -p cli -- serve-http` and retry.';
   }
 }
 

@@ -276,8 +276,16 @@ fn handle_http_connection(stream: &mut TcpStream, server: &mut JsonRpcServer<Age
         }
     }
 
-    if method != "POST" || path != "/jsonrpc" {
+    if path != "/jsonrpc" {
         return write_http_error(stream, 404, "Not Found", "Use POST /jsonrpc");
+    }
+
+    if method == "OPTIONS" {
+        return write_http_options(stream);
+    }
+
+    if method != "POST" {
+        return write_http_error(stream, 405, "Method Not Allowed", "Use POST /jsonrpc");
     }
 
     let mut body = vec![0u8; content_length];
@@ -317,11 +325,12 @@ fn write_http_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Resul
     let status_text = match status {
         200 => "OK",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         500 => "Internal Server Error",
         _ => "OK",
     };
     let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\n\r\n{}",
         status,
         status_text,
         body.len(),
@@ -334,12 +343,18 @@ fn write_http_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Resul
 fn write_http_error(stream: &mut TcpStream, status: u16, status_text: &str, message: &str) -> io::Result<()> {
     let body = serde_json::json!({ "error": message }).to_string();
     let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\n\r\n{}",
         status,
         status_text,
         body.len(),
         body
     );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()
+}
+
+fn write_http_options(stream: &mut TcpStream) -> io::Result<()> {
+    let response = "HTTP/1.1 204 No Content\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nContent-Length: 0\r\n\r\n";
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
