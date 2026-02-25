@@ -792,6 +792,12 @@ fn print_chat_response(response: &ChatResponse, json_output: bool) {
     if let Some(consent) = &response.consent_request {
         println!("consent.scope: {}", consent.scope);
         println!("consent.summary: {}", consent.human_summary);
+        if let Some(ttl) = consent.ttl_seconds {
+            println!("consent.ttl_seconds: {}", ttl);
+        }
+        if let Some(expires_at) = consent.expires_at_unix_seconds {
+            println!("consent.expires_at_unix_seconds: {}", expires_at);
+        }
         println!(
             "consent.requires_extra_confirmation_click: {}",
             consent.requires_extra_confirmation_click

@@ -241,6 +241,8 @@ pub struct PendingConsentRecord {
     pub consent_id: String,
     pub session_id: Option<String>,
     pub requested_at_unix_seconds: u64,
+    #[serde(default)]
+    pub expires_at_unix_seconds: u64,
     pub tool_name: String,
     pub capability_tier: String,
     pub status: String,
@@ -283,6 +285,10 @@ pub struct ConsentRequest {
     pub human_summary: String,
     pub risk_factors: Vec<String>,
     pub requires_extra_confirmation_click: bool,
+    #[serde(default)]
+    pub expires_at_unix_seconds: Option<u64>,
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

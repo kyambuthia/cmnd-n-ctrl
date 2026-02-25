@@ -285,7 +285,14 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     } else {
         app.consents
             .iter()
-            .map(|c| ListItem::new(format!("{} {}", c.consent_id, c.tool_name)))
+            .map(|c| {
+                let ttl = if c.expires_at_unix_seconds > 0 {
+                    format!(" exp={}", c.expires_at_unix_seconds)
+                } else {
+                    String::new()
+                };
+                ListItem::new(format!("{} {}{}", c.consent_id, c.tool_name, ttl))
+            })
             .collect()
     };
     let mut consent_state = ListState::default().with_selected(if app.consents.is_empty() {
@@ -517,7 +524,14 @@ fn approve_selected_consent(client: &mut JsonRpcClient<AgentService>, app: &mut 
         app.set_status("No pending consent selected");
         return Ok(());
     };
-    let response: ChatResponse = local_call(client, "consent.approve", json!({ "consent_id": consent.consent_id }))?;
+    let response: ChatResponse = match local_call(client, "consent.approve", json!({ "consent_id": consent.consent_id })) {
+        Ok(r) => r,
+        Err(err) => {
+            refresh_consents(client, app)?;
+            app.set_status(format!("Approve failed: {}", humanize_consent_error(&err)));
+            return Ok(());
+        }
+    };
     app.last_chat_response = Some(response.clone());
     load_selected_session(client, app)?;
     refresh_consents(client, app)?;
@@ -531,10 +545,33 @@ fn deny_selected_consent(client: &mut JsonRpcClient<AgentService>, app: &mut Tui
         app.set_status("No pending consent selected");
         return Ok(());
     };
-    let response: ChatResponse = local_call(client, "consent.deny", json!({ "consent_id": consent.consent_id }))?;
+    let response: ChatResponse = match local_call(client, "consent.deny", json!({ "consent_id": consent.consent_id })) {
+        Ok(r) => r,
+        Err(err) => {
+            refresh_consents(client, app)?;
+            app.set_status(format!("Deny failed: {}", humanize_consent_error(&err)));
+            return Ok(());
+        }
+    };
     app.last_chat_response = Some(response);
     refresh_consents(client, app)?;
     refresh_audit(client, app)?;
     app.set_status("Consent denied");
     Ok(())
+}
+
+fn humanize_consent_error(err: &str) -> String {
+    if err.contains("consent_expired") {
+        "consent request expired".to_string()
+    } else if err.contains("consent_not_pending:approved") {
+        "consent already approved".to_string()
+    } else if err.contains("consent_not_pending:denied") {
+        "consent already denied".to_string()
+    } else if err.contains("consent_not_pending:expired") {
+        "consent request expired".to_string()
+    } else if err.contains("consent_not_found") {
+        "consent request not found".to_string()
+    } else {
+        err.to_string()
+    }
 }

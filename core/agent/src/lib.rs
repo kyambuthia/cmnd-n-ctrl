@@ -35,6 +35,8 @@ pub struct AgentService {
 }
 
 impl AgentService {
+    const CONSENT_TTL_SECS: u64 = 300;
+
     pub fn new_for_platform(platform: &'static str) -> Self {
         Self::new_for_platform_with_storage(platform, None)
     }
@@ -226,6 +228,7 @@ impl AgentService {
         }
         let mut items = self.read_pending_consents()?;
         let timestamp = Self::now_secs();
+        let expires_at = timestamp.saturating_add(Self::CONSENT_TTL_SECS);
         let first = &pending_events[0];
         let consent_id = self.next_consent_id();
         items.push(PendingConsentState {
@@ -233,6 +236,7 @@ impl AgentService {
                 consent_id: consent_id.clone(),
                 session_id: request.session_id.clone(),
                 requested_at_unix_seconds: timestamp,
+                expires_at_unix_seconds: expires_at,
                 tool_name: first.tool_name.clone(),
                 capability_tier: first.capability_tier.clone(),
                 status: "pending".to_string(),
@@ -247,7 +251,11 @@ impl AgentService {
         });
         self.write_pending_consents(&items)?;
         response.consent_token = Some(consent_id);
-        response.consent_request = Some(build_consent_request(&response.proposed_actions));
+        response.consent_request = Some(build_consent_request(
+            &response.proposed_actions,
+            Some(expires_at),
+            Some(Self::CONSENT_TTL_SECS),
+        ));
         Ok(())
     }
 
@@ -260,9 +268,18 @@ impl AgentService {
         let idx = items
             .iter()
             .position(|item| item.record.consent_id == consent_id)
-            .ok_or_else(|| "unknown or expired consent_id".to_string())?;
+            .ok_or_else(|| "consent_not_found".to_string())?;
+        let now = Self::now_secs();
         if items[idx].record.status != "pending" {
-            return Err("consent_id is no longer pending".to_string());
+            return Err(format!(
+                "consent_not_pending:{}",
+                items[idx].record.status
+            ));
+        }
+        if items[idx].record.expires_at_unix_seconds > 0 && now > items[idx].record.expires_at_unix_seconds {
+            items[idx].record.status = "expired".to_string();
+            let _ = self.write_pending_consents(&items);
+            return Err("consent_expired".to_string());
         }
         items[idx].record.status = new_status.to_string();
         let out = items[idx].clone();
@@ -619,12 +636,21 @@ impl ChatService for AgentService {
     }
 
     fn consent_list(&self, params: ConsentListRequest) -> Result<Vec<PendingConsentRecord>, String> {
+        let now = Self::now_secs();
         let mut items = self
             .storage
             .read_pending_consents()
             .map_err(Self::io_err)?
             .into_iter()
-            .map(|x| x.record)
+            .map(|mut x| {
+                if x.record.status == "pending"
+                    && x.record.expires_at_unix_seconds > 0
+                    && now > x.record.expires_at_unix_seconds
+                {
+                    x.record.status = "expired".to_string();
+                }
+                x.record
+            })
             .collect::<Vec<_>>();
         if let Some(status) = params.status {
             items.retain(|c| c.status == status);
@@ -694,7 +720,11 @@ fn provider_config_has_auth(provider_name: &str, config_json: &str) -> bool {
     })
 }
 
-fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
+fn build_consent_request(
+    proposed_actions: &[ActionEvent],
+    expires_at_unix_seconds: Option<u64>,
+    ttl_seconds: Option<u64>,
+) -> ConsentRequest {
     let pending: Vec<&ActionEvent> = proposed_actions
         .iter()
         .filter(|evt| evt.status == "consent_required")
@@ -739,6 +769,8 @@ fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
         human_summary,
         risk_factors,
         requires_extra_confirmation_click,
+        expires_at_unix_seconds,
+        ttl_seconds,
     }
 }
 
@@ -807,5 +839,105 @@ mod tests {
             })
             .expect("audit list");
         assert!(audits.len() >= 2);
+    }
+
+    #[test]
+    fn consent_approve_replay_returns_explicit_not_pending_error() {
+        let dir = tempdir().expect("tempdir");
+        let service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let mut server = JsonRpcServer::new(service);
+
+        let chat_req = ipc::ChatRequest {
+            session_id: None,
+            messages: vec![ipc::ChatMessage {
+                role: "user".to_string(),
+                content: "tool:activate Browser".to_string(),
+            }],
+            provider_config: ipc::ProviderConfig {
+                provider_name: "openai-stub".to_string(),
+                model: None,
+            },
+            mode: ipc::ChatMode::RequireConfirmation,
+        };
+        let first = server.handle(Request::new(
+            Id::Number(1),
+            "chat.request",
+            serde_json::to_string(&chat_req).expect("serialize"),
+        ));
+        let first: ipc::ChatResponse =
+            serde_json::from_str(first.result_json.as_deref().expect("result")).expect("chat response");
+        let consent_id = first.consent_token.expect("consent token");
+
+        let _approved = server.handle(Request::new(
+            Id::Number(2),
+            "chat.approve",
+            serde_json::to_string(&ipc::ChatApproveRequest {
+                consent_token: consent_id.clone(),
+            })
+            .expect("serialize"),
+        ));
+
+        let replay = server.handle(Request::new(
+            Id::Number(3),
+            "chat.approve",
+            serde_json::to_string(&ipc::ChatApproveRequest {
+                consent_token: consent_id,
+            })
+            .expect("serialize"),
+        ));
+        let err = replay.error.expect("json-rpc error");
+        assert!(err.message.contains("consent_not_pending:approved"));
+    }
+
+    #[test]
+    fn consent_approve_expired_returns_explicit_error() {
+        let dir = tempdir().expect("tempdir");
+        let service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let mut server = JsonRpcServer::new(service);
+
+        let first = server.handle(Request::new(
+            Id::Number(1),
+            "chat.request",
+            serde_json::to_string(&ipc::ChatRequest {
+                session_id: None,
+                messages: vec![ipc::ChatMessage {
+                    role: "user".to_string(),
+                    content: "tool:activate Browser".to_string(),
+                }],
+                provider_config: ipc::ProviderConfig {
+                    provider_name: "openai-stub".to_string(),
+                    model: None,
+                },
+                mode: ipc::ChatMode::RequireConfirmation,
+            })
+            .expect("serialize"),
+        ));
+        let first: ipc::ChatResponse =
+            serde_json::from_str(first.result_json.as_deref().expect("result")).expect("chat response");
+        let consent_id = first.consent_token.expect("consent token");
+
+        let mut pending = server
+            .service()
+            .storage
+            .read_pending_consents()
+            .expect("read pending");
+        let target = pending
+            .iter_mut()
+            .find(|p| p.record.consent_id == consent_id)
+            .expect("pending record");
+        target.record.expires_at_unix_seconds = 1;
+        server
+            .service()
+            .storage
+            .write_pending_consents(&pending)
+            .expect("write pending");
+
+        let expired = server.handle(Request::new(
+            Id::Number(2),
+            "chat.approve",
+            serde_json::to_string(&ipc::ChatApproveRequest { consent_token: consent_id }).expect("serialize"),
+        ));
+        let err = expired.error.expect("json-rpc error");
+        assert!(err.message.contains("consent_expired"));
     }
 }

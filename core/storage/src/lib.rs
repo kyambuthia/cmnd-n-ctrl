@@ -180,6 +180,7 @@ mod tests {
                 consent_id: "consent-1".to_string(),
                 session_id: None,
                 requested_at_unix_seconds: 1,
+                expires_at_unix_seconds: 301,
                 tool_name: "desktop.app.activate".to_string(),
                 capability_tier: "SystemActions".to_string(),
                 status: "pending".to_string(),
@@ -188,6 +189,7 @@ mod tests {
                 request_fingerprint: "req-1".to_string(),
             },
             chat_request: ChatRequest {
+                session_id: None,
                 messages: vec![],
                 provider_config: ProviderConfig {
                     provider_name: "openai-stub".to_string(),

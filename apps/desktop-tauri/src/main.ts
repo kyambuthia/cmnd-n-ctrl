@@ -261,9 +261,17 @@ function showConsent(requests, requestFingerprint, consentToken, consentRequestM
   const riskFactors = Array.isArray(consentRequestMeta && consentRequestMeta.risk_factors)
     ? consentRequestMeta.risk_factors
     : [];
+  const expiryBits = [];
+  if (consentRequestMeta && consentRequestMeta.ttl_seconds) {
+    expiryBits.push(`TTL: ${consentRequestMeta.ttl_seconds}s`);
+  }
+  if (consentRequestMeta && consentRequestMeta.expires_at_unix_seconds) {
+    expiryBits.push(`expires at ${consentRequestMeta.expires_at_unix_seconds}`);
+  }
+  const expirySuffix = expiryBits.length ? ` ${expiryBits.join(' · ')}` : '';
   consentScopeEl.textContent = extraClick
-    ? `Approval scope: ${scopeLabel} (${requestFingerprint || 'unknown'}). High-risk actions require a second confirmation click.${riskFactors.length ? ` Risks: ${riskFactors.join(', ')}` : ''}`
-    : `Approval scope: ${scopeLabel} (${requestFingerprint || 'unknown'}).${riskFactors.length ? ` Risks: ${riskFactors.join(', ')}` : ''}`;
+    ? `Approval scope: ${scopeLabel} (${requestFingerprint || 'unknown'}). High-risk actions require a second confirmation click.${riskFactors.length ? ` Risks: ${riskFactors.join(', ')}` : ''}${expirySuffix}`
+    : `Approval scope: ${scopeLabel} (${requestFingerprint || 'unknown'}).${riskFactors.length ? ` Risks: ${riskFactors.join(', ')}` : ''}${expirySuffix}`;
 
   for (const req of requests) {
     const nameChip = document.createElement('span');
@@ -384,8 +392,10 @@ function renderJsonRpcResponse(payload) {
 
   if (payload && payload.error) {
     const body = `${payload.error.code}: ${payload.error.message}`;
-    setCurrentAction('warn', 'JSON-RPC Error', body, ['error']);
-    pushHistory('warn', 'JSON-RPC Error', body);
+    const consentError = humanizeConsentRpcError(payload.error.message || '');
+    const title = consentError ? 'Consent Error' : 'JSON-RPC Error';
+    setCurrentAction('warn', title, consentError || body, ['error']);
+    pushHistory('warn', title, consentError || body);
     setStatus('Request failed');
     return;
   }
@@ -399,6 +409,23 @@ function renderJsonRpcResponse(payload) {
 
   renderToolsResult(result);
   setStatus('Tool list received');
+}
+
+function humanizeConsentRpcError(message) {
+  const msg = String(message || '');
+  if (msg.includes('consent_expired') || msg.includes('consent_not_pending:expired')) {
+    return 'This approval request has expired. Refresh the approvals queue and request the action again.';
+  }
+  if (msg.includes('consent_not_pending:approved')) {
+    return 'This approval request was already approved.';
+  }
+  if (msg.includes('consent_not_pending:denied')) {
+    return 'This approval request was already denied.';
+  }
+  if (msg.includes('consent_not_found')) {
+    return 'This approval request no longer exists (already handled or expired).';
+  }
+  return null;
 }
 
 async function callJsonRpc(method, params) {
