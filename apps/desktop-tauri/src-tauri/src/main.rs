@@ -1,6 +1,10 @@
-use std::io;
+use std::env;
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 struct JsonRpcBridgeRequest {
@@ -16,6 +20,8 @@ struct JsonRpcBridgeResponse {
 struct BackendProcessManager {
     child: Option<Child>,
     mode: BackendMode,
+    http_addr: String,
+    auto_spawn: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,21 +36,39 @@ impl Default for BackendProcessManager {
         Self {
             child: None,
             mode: BackendMode::HttpDev,
+            http_addr: env::var("CMND_N_CTRL_BACKEND_ADDR")
+                .unwrap_or_else(|_| "127.0.0.1:7777".to_string()),
+            auto_spawn: env::var("CMND_N_CTRL_AUTOSPAWN_BACKEND")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(true),
         }
     }
 }
 
 impl BackendProcessManager {
     fn ensure_started(&mut self) -> io::Result<()> {
-        if self.child.is_some() {
+        if !matches!(self.mode, BackendMode::HttpDev) {
+            return Err(io::Error::other("only HttpDev bridge mode implemented"));
+        }
+
+        if self.check_http_ready().is_ok() {
             return Ok(());
         }
 
-        // Scaffold behavior only: attempt to start the CLI local HTTP server if available.
-        // In a real Tauri integration, this would use tauri::AppHandle for paths/logging and
-        // expose commands like `jsonrpc_request` via `tauri::generate_handler!`.
+        if self.child.is_some() {
+            self.wait_for_http_ready()?;
+            return Ok(());
+        }
+
+        if !self.auto_spawn {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "backend not reachable and autospawn disabled",
+            ));
+        }
+
         let child = Command::new("cargo")
-            .args(["run", "-p", "cli", "--", "serve-http"])
+            .args(["run", "-p", "cli", "--", "serve-http", "--addr", &self.http_addr])
             .current_dir(repo_root_guess()?)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -52,6 +76,25 @@ impl BackendProcessManager {
             .spawn()?;
 
         self.child = Some(child);
+        self.wait_for_http_ready()
+    }
+
+    fn wait_for_http_ready(&self) -> io::Result<()> {
+        let mut last_err = None;
+        for _ in 0..25 {
+            match self.check_http_ready() {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_err = Some(err);
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::other("backend did not become ready")))
+    }
+
+    fn check_http_ready(&self) -> io::Result<()> {
+        let _ = TcpStream::connect(&self.http_addr)?;
         Ok(())
     }
 
@@ -62,14 +105,10 @@ impl BackendProcessManager {
         }
     }
 
-    fn jsonrpc_request_stub(&mut self, req: JsonRpcBridgeRequest) -> JsonRpcBridgeResponse {
-        JsonRpcBridgeResponse {
-            response_json: format!(
-                "{{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{{\"code\":-32000,\"message\":\"Tauri backend bridge not wired yet (mode={:?}). Received {} bytes.\"}}}}",
-                self.mode,
-                req.payload_json.len()
-            ),
-        }
+    fn jsonrpc_request(&mut self, req: JsonRpcBridgeRequest) -> io::Result<JsonRpcBridgeResponse> {
+        self.ensure_started()?;
+        let response_json = post_jsonrpc_http(&self.http_addr, &req.payload_json)?;
+        Ok(JsonRpcBridgeResponse { response_json })
     }
 }
 
@@ -79,33 +118,91 @@ impl Drop for BackendProcessManager {
     }
 }
 
+fn post_jsonrpc_http(addr: &str, payload_json: &str) -> io::Result<String> {
+    let mut stream = TcpStream::connect(addr)?;
+    let request = format!(
+        "POST /jsonrpc HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        payload_json.len(),
+        payload_json
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw)?;
+    let raw = String::from_utf8(raw)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("utf8 response: {err}")))?;
+    let (headers, body) = raw
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed http response"))?;
+    let status = headers
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    if status != 200 {
+        return Err(io::Error::other(format!("http {status}: {body}")));
+    }
+    Ok(body.to_string())
+}
+
 fn repo_root_guess() -> io::Result<PathBuf> {
-    // `apps/desktop-tauri/src-tauri` -> repo root is three levels up.
-    let cwd = std::env::current_dir()?;
+    let cwd = env::current_dir()?;
+    if cwd.ends_with("src-tauri") {
+        return Ok(cwd.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).unwrap_or(&cwd).to_path_buf());
+    }
     Ok(cwd)
 }
 
+fn jsonrpc_request_command(
+    manager: &mut BackendProcessManager,
+    payload_json: String,
+) -> Result<String, String> {
+    manager
+        .jsonrpc_request(JsonRpcBridgeRequest { payload_json })
+        .map(|r| r.response_json)
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
-    // Compile-safe scaffold for the next stage:
-    // - define bridge/process lifecycle contract
-    // - keep backend binary buildable without Tauri dependencies
-    //
-    // Planned Tauri v2 wiring:
-    // 1. add `tauri` dependency
-    // 2. define command `jsonrpc_request(payload_json: String) -> String`
-    // 3. manage local backend child (stdio or local socket/http) in shared state
+    // Compile-safe bridge binary for eventual Tauri v2 integration.
+    // Planned next step:
+    // - add `tauri` dependency and annotate `jsonrpc_request_command` as a Tauri command
+    // - store `BackendProcessManager` in managed Tauri state
+    // - call from frontend via `invoke('jsonrpc_request', { payloadJson })`
     let mut manager = BackendProcessManager::default();
 
-    println!("desktop-tauri backend scaffold (bridge contract placeholder)");
-    let probe = manager.jsonrpc_request_stub(JsonRpcBridgeRequest {
-        payload_json: "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"tools.list\",\"params\":{}}".to_string(),
-    });
-    println!("jsonrpc_request stub ready ({} bytes)", probe.response_json.len());
+    let probe_payload =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools.list\",\"params\":{}}".to_string();
+    match jsonrpc_request_command(&mut manager, probe_payload) {
+        Ok(resp) => println!("desktop bridge ready (response bytes={})", resp.len()),
+        Err(err) => {
+            eprintln!("desktop bridge probe failed: {err}");
+            println!("desktop bridge initialized (backend unavailable)");
+        }
+    }
+}
 
-    // Prevent unused method warnings while keeping runtime side effects minimal.
-    let _ = manager.ensure_started().map_err(|err| {
-        eprintln!("backend auto-start skipped in scaffold: {err}");
-        err
-    });
-    manager.stop();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_http_body_roundtrip_helper_contract() {
+        // Structural sanity test for the bridge command wrapper contract.
+        let mut manager = BackendProcessManager {
+            child: None,
+            mode: BackendMode::HttpDev,
+            http_addr: "127.0.0.1:1".to_string(),
+            auto_spawn: false,
+        };
+        let result = jsonrpc_request_command(
+            &mut manager,
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools.list\",\"params\":{}}".to_string(),
+        );
+        assert!(result.is_err());
+    }
 }

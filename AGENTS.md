@@ -44,3 +44,4 @@
 - Run the UI + Tauri shell (after adding Tauri toolchain/deps): `npm run tauri dev`
 - In dev mode, the UI can spawn/connect to a local IPC child process; production should use a local socket/pipe.
 - Prototype webview harness (current): `bash scripts/dev-prototype.sh` (starts local HTTP JSON-RPC + static UI server)
+- `src-tauri` backend bridge scaffold now forwards JSON-RPC to the local CLI backend and can auto-spawn `cli serve-http`; Tauri command registration is the remaining step.
