@@ -391,6 +391,10 @@
                 <h2>Status</h2>
                 <div id="status" class="status"><span class="dot"></span>Ready.</div>
               </div>
+              <div class="card">
+                <h2>Workspace</h2>
+                <pre id="workspaceState" class="response">(no workspace data loaded)</pre>
+              </div>
             </div>
           </div>
           <div class="compose">
@@ -403,11 +407,20 @@
               <button class="ghost prompt-preset" type="button" data-prompt="tool:open https://example.com">Open URL (consent)</button>
             </div>
             <div class="row">
+              <label class="muted" for="sessionId">session</label>
+              <input id="sessionId" type="text" placeholder="sess-..." style="flex:1; min-width:180px; background:#181818; color:var(--ink); border:1px solid var(--border); border-radius:999px; padding:0.55rem 0.8rem;" />
               <label class="muted"><input id="requireConfirmation" type="checkbox" checked /> require confirmation</label>
               <button id="send" type="button">Send</button>
               <button id="listTools" class="secondary" type="button">List Tools</button>
               <button id="clearView" class="ghost" type="button">Clear</button>
               <span class="muted">Enter to send</span>
+            </div>
+            <div class="row">
+              <button id="newSession" class="secondary" type="button">New Session</button>
+              <button id="listSessions" class="ghost" type="button">Sessions</button>
+              <button id="listProviders" class="ghost" type="button">Providers</button>
+              <button id="listConsents" class="ghost" type="button">Approvals Queue</button>
+              <button id="listAudit" class="ghost" type="button">Audit</button>
             </div>
           </div>
         </section>

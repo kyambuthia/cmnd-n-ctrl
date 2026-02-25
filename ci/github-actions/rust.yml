@@ -25,6 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Check workspace
         run: cargo check --workspace
+      - name: Build CLI
+        run: cargo build -p cli
       - name: Test workspace
         run: cargo test --workspace
       - name: Test core crates

@@ -245,6 +245,7 @@ where
             audit_id,
             request_fingerprint,
             consent_token: None,
+            session_id: None,
             consent_request: None,
             actions_executed: executed_actions,
             proposed_actions,

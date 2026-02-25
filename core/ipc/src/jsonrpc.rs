@@ -60,3 +60,23 @@ impl Response {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_and_response_constructors() {
+        let req = Request::new(Id::Number(7), "tools.list", "{}");
+        assert_eq!(req.jsonrpc, "2.0");
+        assert_eq!(req.method, "tools.list");
+
+        let ok = Response::success(Id::Number(7), "[]");
+        assert!(ok.error.is_none());
+        assert_eq!(ok.result_json.as_deref(), Some("[]"));
+
+        let err = Response::error(Id::Number(7), -32601, "method not found");
+        assert!(err.result_json.is_none());
+        assert_eq!(err.error.as_ref().map(|e| e.code), Some(-32601));
+    }
+}

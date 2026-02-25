@@ -41,9 +41,17 @@ fn print_help() {
     println!("USAGE:");
     println!("  cli --help");
     println!("  cli tools [--json] [--raw] [--addr <host:port>]");
-    println!("  cli chat <message> [--provider <name>] [--require-confirmation] [--json] [--addr <host:port>]");
+    println!("  cli chat <message> [--provider <name>] [--session <id>] [--require-confirmation] [--json] [--addr <host:port>]");
     println!("  cli approve <consent-token> [--json] [--addr <host:port>]   # requires running serve-http");
     println!("  cli deny <consent-token> [--json] [--addr <host:port>]      # requires running serve-http");
+    println!("  cli consent list|approve|deny ...");
+    println!("  cli session new|list|open|rm|append ...");
+    println!("  cli auth login|list|logout ...");
+    println!("  cli providers list|set|config-get|config-set ...");
+    println!("  cli mcp servers list|add|rm|start|stop ...");
+    println!("  cli project open|status ...");
+    println!("  cli audit list|show ...");
+    println!("  cli tui   # minimal terminal UI");
     println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
     println!("  cli serve-http [--addr <host:port>]");
@@ -117,6 +125,7 @@ fn main() {
             let mut require_confirmation = false;
             let mut json_output = false;
             let mut remote_addr = None;
+            let mut session_id = None;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -144,12 +153,20 @@ fn main() {
                             continue;
                         }
                     }
+                    "--session" => {
+                        if let Some(next) = args.get(i + 1) {
+                            session_id = Some(next.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
                     _ => {}
                 }
                 i += 1;
             }
 
             let chat_request = ChatRequest {
+                session_id,
                 messages: ipc::sample_messages(&args[1]),
                 provider_config: ProviderConfig {
                     provider_name,
@@ -177,6 +194,33 @@ fn main() {
             };
 
             print_chat_response(&response, json_output);
+        }
+        "consent" => {
+            handle_consent_command(&mut client, &args[1..]);
+        }
+        "session" | "sessions" => {
+            handle_session_command(&mut client, &args[1..]);
+        }
+        "auth" => {
+            handle_auth_command(&mut client, &args[1..]);
+        }
+        "providers" => {
+            handle_providers_command(&mut client, &args[1..]);
+        }
+        "mcp" => {
+            handle_mcp_command(&mut client, &args[1..]);
+        }
+        "project" => {
+            handle_project_command(&mut client, &args[1..]);
+        }
+        "audit" => {
+            handle_audit_command(&mut client, &args[1..]);
+        }
+        "tui" => {
+            if let Err(err) = run_minimal_tui(&mut client) {
+                eprintln!("tui error: {err}");
+                std::process::exit(1);
+            }
         }
         "approve" => {
             if args.len() < 2 {
@@ -374,6 +418,351 @@ fn parse_addr_flag(args: &[String]) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|a| a == flag)
+}
+
+fn string_flag(args: &[String], flag: &str) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == flag {
+            return args.get(i + 1).cloned();
+        }
+        i += 1;
+    }
+    None
+}
+
+fn positional_without_flags(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" | "--raw" => i += 1,
+            "--addr" | "--key" | "--provider" | "--session" | "--title" | "--path" | "--command" | "--name" | "--status" | "--limit" => {
+                i += 2
+            }
+            "--args" => i += 2,
+            _ => {
+                out.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn backend_call_value(
+    client: &mut JsonRpcClient<AgentService>,
+    addr: Option<&str>,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    if let Some(addr) = addr {
+        return wire_result(call_http_jsonrpc(addr, method, params).map_err(|e| e.to_string())?);
+    }
+    let raw = client.call_raw(Request::new(
+        Id::Number(1),
+        method.to_string(),
+        params.to_string(),
+    ));
+    wire_result(to_wire_response(raw))
+}
+
+fn print_value(value: &Value, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string())
+        );
+    } else if let Some(s) = value.as_str() {
+        println!("{s}");
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string())
+        );
+    }
+}
+
+fn handle_consent_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.is_empty() {
+        eprintln!("usage: cli consent list|approve|deny ...");
+        std::process::exit(2);
+    }
+    let (method, params) = match pos[0].as_str() {
+        "list" => (
+            "consent.list",
+            json!({
+                "status": string_flag(args, "--status"),
+                "session_id": string_flag(args, "--session")
+            }),
+        ),
+        "approve" if pos.len() >= 2 => (
+            "consent.approve",
+            json!({ "consent_id": pos[1] }),
+        ),
+        "deny" if pos.len() >= 2 => (
+            "consent.deny",
+            json!({ "consent_id": pos[1] }),
+        ),
+        _ => {
+            eprintln!("usage: cli consent list|approve <id>|deny <id>");
+            std::process::exit(2);
+        }
+    };
+    let result = backend_call_value(client, addr.as_deref(), method, params).unwrap_or_else(|err| {
+        eprintln!("consent error: {err}");
+        std::process::exit(1);
+    });
+    if method == "consent.approve" || method == "consent.deny" {
+        let response: ChatResponse = serde_json::from_value(result).unwrap_or_else(|err| {
+            eprintln!("consent parse error: {err}");
+            std::process::exit(1);
+        });
+        print_chat_response(&response, json_output);
+    } else {
+        print_value(&result, json_output);
+    }
+}
+
+fn handle_session_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.is_empty() {
+        eprintln!("usage: cli session new|list|open|rm|append ...");
+        std::process::exit(2);
+    }
+    let (method, params) = match pos[0].as_str() {
+        "new" => ("sessions.create", json!({ "title": string_flag(args, "--title") })),
+        "list" => ("sessions.list", json!({})),
+        "open" | "get" if pos.len() >= 2 => ("sessions.get", json!({ "session_id": pos[1] })),
+        "rm" | "delete" if pos.len() >= 2 => ("sessions.delete", json!({ "session_id": pos[1] })),
+        "append" if pos.len() >= 3 => (
+            "sessions.messages.append",
+            json!({
+                "session_id": pos[1],
+                "messages": [{"role": "user", "content": pos[2..].join(" ")}]
+            }),
+        ),
+        _ => {
+            eprintln!("usage: cli session new|list|open <id>|rm <id>|append <id> <message>");
+            std::process::exit(2);
+        }
+    };
+    let result = backend_call_value(client, addr.as_deref(), method, params).unwrap_or_else(|err| {
+        eprintln!("session error: {err}");
+        std::process::exit(1);
+    });
+    print_value(&result, json_output);
+}
+
+fn handle_auth_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.is_empty() {
+        eprintln!("usage: cli auth login|list|logout ...");
+        std::process::exit(2);
+    }
+    match pos[0].as_str() {
+        "list" => {
+            let result = backend_call_value(client, addr.as_deref(), "providers.list", json!({}))
+                .unwrap_or_else(|err| {
+                    eprintln!("auth list error: {err}");
+                    std::process::exit(1);
+                });
+            print_value(&result, json_output);
+        }
+        "login" => {
+            if pos.len() < 2 {
+                eprintln!("usage: cli auth login <provider> --key <token>");
+                std::process::exit(2);
+            }
+            let provider = pos[1].clone();
+            let key = string_flag(args, "--key").unwrap_or_default();
+            let cfg = json!({ "api_key": key }).to_string();
+            let _ = backend_call_value(
+                client,
+                addr.as_deref(),
+                "providers.config.set",
+                json!({ "provider_name": provider, "config_json": cfg }),
+            )
+            .unwrap_or_else(|err| {
+                eprintln!("auth login error: {err}");
+                std::process::exit(1);
+            });
+            let result = backend_call_value(
+                client,
+                addr.as_deref(),
+                "providers.set",
+                json!({ "provider_name": pos[1] }),
+            )
+            .unwrap_or_else(|err| {
+                eprintln!("auth login error: {err}");
+                std::process::exit(1);
+            });
+            print_value(&result, json_output);
+        }
+        "logout" => {
+            if pos.len() < 2 {
+                eprintln!("usage: cli auth logout <provider>");
+                std::process::exit(2);
+            }
+            let result = backend_call_value(
+                client,
+                addr.as_deref(),
+                "providers.config.set",
+                json!({ "provider_name": pos[1], "config_json": "{}" }),
+            )
+            .unwrap_or_else(|err| {
+                eprintln!("auth logout error: {err}");
+                std::process::exit(1);
+            });
+            print_value(&result, json_output);
+        }
+        _ => {
+            eprintln!("usage: cli auth login|list|logout");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn handle_providers_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.is_empty() {
+        eprintln!("usage: cli providers list|set|config-get|config-set ...");
+        std::process::exit(2);
+    }
+    let (method, params) = match pos[0].as_str() {
+        "list" => ("providers.list", json!({})),
+        "set" if pos.len() >= 2 => ("providers.set", json!({ "provider_name": pos[1] })),
+        "config-get" => (
+            "providers.config.get",
+            json!({ "provider_name": pos.get(1).cloned() }),
+        ),
+        "config-set" if pos.len() >= 3 => (
+            "providers.config.set",
+            json!({ "provider_name": pos[1], "config_json": pos[2] }),
+        ),
+        _ => {
+            eprintln!("usage: cli providers list|set <name>|config-get [name]|config-set <name> <json>");
+            std::process::exit(2);
+        }
+    };
+    let result = backend_call_value(client, addr.as_deref(), method, params).unwrap_or_else(|err| {
+        eprintln!("providers error: {err}");
+        std::process::exit(1);
+    });
+    print_value(&result, json_output);
+}
+
+fn handle_mcp_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.len() < 2 || pos[0] != "servers" {
+        eprintln!("usage: cli mcp servers list|add|rm|start|stop ...");
+        std::process::exit(2);
+    }
+    let (method, params) = match pos[1].as_str() {
+        "list" => ("mcp.servers.list", json!({})),
+        "add" => {
+            let name = string_flag(args, "--name").unwrap_or_else(|| "server".to_string());
+            let command = string_flag(args, "--command").unwrap_or_else(|| "echo".to_string());
+            let argv = string_flag(args, "--args")
+                .map(|s| s.split_whitespace().map(|v| v.to_string()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            (
+                "mcp.servers.add",
+                json!({ "name": name, "command": command, "args": argv }),
+            )
+        }
+        "rm" | "remove" if pos.len() >= 3 => ("mcp.servers.remove", json!({ "server_id": pos[2] })),
+        "start" if pos.len() >= 3 => ("mcp.servers.start", json!({ "server_id": pos[2] })),
+        "stop" if pos.len() >= 3 => ("mcp.servers.stop", json!({ "server_id": pos[2] })),
+        _ => {
+            eprintln!("usage: cli mcp servers list|add --name N --command CMD [--args \"...\"]|rm <id>|start <id>|stop <id>");
+            std::process::exit(2);
+        }
+    };
+    let result = backend_call_value(client, addr.as_deref(), method, params).unwrap_or_else(|err| {
+        eprintln!("mcp error: {err}");
+        std::process::exit(1);
+    });
+    print_value(&result, json_output);
+}
+
+fn handle_project_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.is_empty() {
+        eprintln!("usage: cli project open <path>|status [--path <path>]");
+        std::process::exit(2);
+    }
+    let (method, params) = match pos[0].as_str() {
+        "open" if pos.len() >= 2 => ("project.open", json!({ "path": pos[1] })),
+        "status" => ("project.status", json!({ "path": string_flag(args, "--path") })),
+        _ => {
+            eprintln!("usage: cli project open <path>|status [--path <path>]");
+            std::process::exit(2);
+        }
+    };
+    let result = backend_call_value(client, addr.as_deref(), method, params).unwrap_or_else(|err| {
+        eprintln!("project error: {err}");
+        std::process::exit(1);
+    });
+    print_value(&result, json_output);
+}
+
+fn handle_audit_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let pos = positional_without_flags(args);
+    if pos.is_empty() {
+        eprintln!("usage: cli audit list|show ...");
+        std::process::exit(2);
+    }
+    let (method, params) = match pos[0].as_str() {
+        "list" => (
+            "audit.list",
+            json!({
+                "session_id": string_flag(args, "--session"),
+                "limit": string_flag(args, "--limit").and_then(|s| s.parse::<usize>().ok())
+            }),
+        ),
+        "show" if pos.len() >= 2 => ("audit.get", json!({ "audit_id": pos[1] })),
+        _ => {
+            eprintln!("usage: cli audit list [--session <id>] [--limit N]|show <audit_id>");
+            std::process::exit(2);
+        }
+    };
+    let result = backend_call_value(client, addr.as_deref(), method, params).unwrap_or_else(|err| {
+        eprintln!("audit error: {err}");
+        std::process::exit(1);
+    });
+    print_value(&result, json_output);
+}
+
+fn run_minimal_tui(client: &mut JsonRpcClient<AgentService>) -> Result<(), String> {
+    let sessions = backend_call_value(client, None, "sessions.list", json!({}))?;
+    let consents = backend_call_value(client, None, "consent.list", json!({ "status": "pending", "session_id": null }))?;
+    let audits = backend_call_value(client, None, "audit.list", json!({ "session_id": null, "limit": 10 }))?;
+    println!("cmnd-n-ctrl tui (minimal placeholder)");
+    println!("sessions: {}", sessions.as_array().map(|a| a.len()).unwrap_or(0));
+    println!("pending consents: {}", consents.as_array().map(|a| a.len()).unwrap_or(0));
+    println!("recent audits: {}", audits.as_array().map(|a| a.len()).unwrap_or(0));
+    println!("TODO: ratatui interactive panes (session/chat/approvals/audit).");
+    Ok(())
 }
 
 fn wire_result<T>(wire: WireResponse) -> Result<T, String>

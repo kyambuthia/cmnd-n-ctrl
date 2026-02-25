@@ -55,6 +55,23 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         }
     }
 
+    if prompt.to_ascii_lowercase().contains("tool:apps") && has_tool(tools, "desktop.app.list") {
+        return Some(ToolCall {
+            name: "desktop.app.list".to_string(),
+            arguments_json: json!({ "filter": "" }).to_string(),
+        });
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:activate") {
+        if has_tool(tools, "desktop.app.activate") {
+            let app = rest.trim();
+            return Some(ToolCall {
+                name: "desktop.app.activate".to_string(),
+                arguments_json: json!({ "app": if app.is_empty() { "Browser" } else { app } }).to_string(),
+            });
+        }
+    }
+
     if let Some(rest) = slice_after_case_insensitive(prompt, "tool:add") {
         if has_tool(tools, "math.add") {
             let mut nums = rest

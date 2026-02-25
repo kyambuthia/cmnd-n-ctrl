@@ -35,6 +35,12 @@ impl Default for Policy {
 
 impl Policy {
     pub fn capability_tier(&self, tool_call: &ToolCall) -> CapabilityTier {
+        if tool_call.name == "desktop.app.activate" {
+            return CapabilityTier::SystemActions;
+        }
+        if tool_call.name == "desktop.app.list" {
+            return CapabilityTier::LocalActions;
+        }
         if tool_call.name.starts_with("time.")
             || tool_call.name.starts_with("math.")
             || tool_call.name.starts_with("text.")
@@ -69,5 +75,57 @@ impl Policy {
         } else {
             Authorization::Allow
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipc::ToolCall;
+
+    fn call(name: &str) -> ToolCall {
+        ToolCall {
+            name: name.to_string(),
+            arguments_json: "{}".to_string(),
+        }
+    }
+
+    #[test]
+    fn authorize_allows_readonly_in_best_effort() {
+        let policy = Policy::default();
+        let result = policy.authorize(
+            &call("time.now"),
+            &PolicyContext {
+                mode: ChatMode::BestEffort,
+                user_confirmed: false,
+            },
+        );
+        assert!(matches!(result, Authorization::Allow));
+    }
+
+    #[test]
+    fn authorize_requires_confirmation_for_local_action() {
+        let policy = Policy::default();
+        let result = policy.authorize(
+            &call("desktop.app.list"),
+            &PolicyContext {
+                mode: ChatMode::BestEffort,
+                user_confirmed: false,
+            },
+        );
+        assert!(matches!(result, Authorization::RequireConfirmation { .. }));
+    }
+
+    #[test]
+    fn authorize_denies_internal_tools() {
+        let policy = Policy::default();
+        let result = policy.authorize(
+            &call("internal.secret"),
+            &PolicyContext {
+                mode: ChatMode::BestEffort,
+                user_confirmed: false,
+            },
+        );
+        assert!(matches!(result, Authorization::Deny { .. }));
     }
 }

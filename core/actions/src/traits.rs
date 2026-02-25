@@ -117,6 +117,46 @@ impl ActionBackend for StubActionBackend {
             };
         }
 
+        if tool_call.name == "desktop.app.list" {
+            let filter = args.get("filter").and_then(Value::as_str).unwrap_or_default();
+            return ToolResult {
+                name: tool_call.name.clone(),
+                result_json: json!({
+                    "status": "ok",
+                    "platform": self.platform,
+                    "apps": [
+                        {"id":"app-1","name":"Browser","state":"running"},
+                        {"id":"app-2","name":"Editor","state":"running"}
+                    ],
+                    "filter": filter,
+                    "note": "stub_only_not_real_process_enumeration"
+                })
+                .to_string(),
+                evidence: crate::evidence::action_evidence(
+                    format!("Listed desktop apps stub on {}", self.platform),
+                    format!("stub://{}/desktop.app.list", self.platform),
+                ),
+            };
+        }
+
+        if tool_call.name == "desktop.app.activate" {
+            let app = args.get("app").and_then(Value::as_str).unwrap_or("unknown");
+            return ToolResult {
+                name: tool_call.name.clone(),
+                result_json: json!({
+                    "status": "ok",
+                    "platform": self.platform,
+                    "app": app,
+                    "note": "stub_only_not_real_window_activation"
+                })
+                .to_string(),
+                evidence: crate::evidence::action_evidence(
+                    format!("Activated desktop app stub '{}' on {}", app, self.platform),
+                    format!("stub://{}/desktop.app.activate", self.platform),
+                ),
+            };
+        }
+
         ToolResult {
             name: tool_call.name.clone(),
             result_json: format!(

@@ -5,6 +5,7 @@ members = [
   "providers",
   "actions",
   "plugins",
+  "storage",
 ]
 resolver = "2"
 

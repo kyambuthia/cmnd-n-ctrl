@@ -3,9 +3,21 @@ pub mod policy;
 pub mod tool_registry;
 
 use actions::traits::StubActionBackend;
-use ipc::{ActionEvent, ChatApproveRequest, ChatDenyRequest, ChatRequest, ChatResponse, ChatService, ConsentRequest, Tool};
+use ipc::{
+    ActionEvent, AuditEntry, AuditGetRequest, AuditListRequest, ChatApproveRequest, ChatDenyRequest,
+    ChatRequest, ChatResponse, ChatService, ConsentActionRequest, ConsentListRequest, ConsentRequest,
+    McpServerAddRequest, McpServerMutationResponse, McpServerRecord, McpServerRemoveRequest,
+    McpServerStateRequest, PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse,
+    ProjectStatusRequest, ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
+    ProviderConfigSetRequest, ProviderConfigSetResponse, ProviderInfo, ProvidersSetRequest, Session,
+    SessionCreateRequest, SessionDeleteRequest, SessionDeleteResponse, SessionGetRequest,
+    SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, Tool,
+};
 use providers::ProviderChoice;
-use std::collections::HashMap;
+use std::env;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+use storage::{FileStorage, PendingConsentState, ProjectState, ProviderState, Storage};
 
 use crate::orchestrator::Orchestrator;
 use crate::policy::Policy;
@@ -14,13 +26,27 @@ use crate::tool_registry::ToolRegistry;
 pub struct AgentService {
     orchestrator: Orchestrator<ProviderChoice, StubActionBackend>,
     tool_registry: ToolRegistry,
-    pending_approvals: HashMap<String, ChatRequest>,
-    consent_counter: u64,
+    storage: FileStorage,
+    platform: &'static str,
     synthetic_audit_counter: u64,
+    consent_counter: u64,
+    session_counter: u64,
+    mcp_counter: u64,
 }
 
 impl AgentService {
     pub fn new_for_platform(platform: &'static str) -> Self {
+        Self::new_for_platform_with_storage(platform, None)
+    }
+
+    pub fn new_for_platform_with_storage_dir(
+        platform: &'static str,
+        dir: impl AsRef<Path>,
+    ) -> Self {
+        Self::new_for_platform_with_storage(platform, Some(dir.as_ref()))
+    }
+
+    fn new_for_platform_with_storage(platform: &'static str, storage_dir: Option<&Path>) -> Self {
         let tool_registry = ToolRegistry::new_default();
         let orchestrator = Orchestrator::new(
             Policy::default(),
@@ -28,13 +54,88 @@ impl AgentService {
             ProviderChoice::by_name("openai-stub"),
             StubActionBackend::new(platform),
         );
-        Self {
+        let storage = if let Some(dir) = storage_dir {
+            FileStorage::new_in_dir(dir).expect("custom file storage")
+        } else {
+            FileStorage::new_default().unwrap_or_else(|_| {
+                let fallback = env::temp_dir().join("cmnd-n-ctrl-local-data");
+                FileStorage::new_in_dir(fallback).expect("fallback file storage")
+            })
+        };
+        let mut svc = Self {
             orchestrator,
             tool_registry,
-            pending_approvals: HashMap::new(),
-            consent_counter: 0,
+            storage,
+            platform,
             synthetic_audit_counter: 0,
+            consent_counter: 0,
+            session_counter: 0,
+            mcp_counter: 0,
+        };
+        svc.hydrate_counters();
+        svc
+    }
+
+    fn hydrate_counters(&mut self) {
+        if let Ok(items) = self.storage.read_pending_consents() {
+            self.consent_counter = items
+                .iter()
+                .filter_map(|c| c.record.consent_id.strip_prefix("consent-"))
+                .filter_map(|s| s.parse::<u64>().ok())
+                .max()
+                .unwrap_or(0);
         }
+        if let Ok(items) = self.storage.list_sessions() {
+            self.session_counter = items
+                .iter()
+                .filter_map(|s| s.id.strip_prefix("sess-"))
+                .filter_map(|s| s.parse::<u64>().ok())
+                .max()
+                .unwrap_or(0);
+        }
+        if let Ok(items) = self.storage.read_mcp_servers() {
+            self.mcp_counter = items
+                .iter()
+                .filter_map(|s| s.id.strip_prefix("mcp-"))
+                .filter_map(|s| s.parse::<u64>().ok())
+                .max()
+                .unwrap_or(0);
+        }
+        if let Ok(items) = self.storage.read_audit_entries() {
+            self.synthetic_audit_counter = items
+                .iter()
+                .filter_map(|a| a.audit_id.rsplit('-').next())
+                .filter_map(|s| s.parse::<u64>().ok())
+                .max()
+                .unwrap_or(0);
+        }
+    }
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    fn next_synthetic_audit_id(&mut self) -> String {
+        self.synthetic_audit_counter += 1;
+        format!("audit-{:06}", self.synthetic_audit_counter)
+    }
+
+    fn next_consent_id(&mut self) -> String {
+        self.consent_counter += 1;
+        format!("consent-{:06}", self.consent_counter)
+    }
+
+    fn next_session_id(&mut self) -> String {
+        self.session_counter += 1;
+        format!("sess-{:06}", self.session_counter)
+    }
+
+    fn next_mcp_id(&mut self) -> String {
+        self.mcp_counter += 1;
+        format!("mcp-{:06}", self.mcp_counter)
     }
 
     fn rebuild_orchestrator(&mut self, provider_name: &str) {
@@ -43,102 +144,554 @@ impl AgentService {
             Policy::default(),
             self.tool_registry.clone(),
             provider,
-            StubActionBackend::new("cli"),
+            StubActionBackend::new(self.platform),
         );
     }
 
-    fn issue_consent_token(&mut self, request: ChatRequest) -> String {
-        self.consent_counter += 1;
-        let token = format!("consent-{:06}", self.consent_counter);
-        self.pending_approvals.insert(token.clone(), request);
-        token
+    fn io_err(err: std::io::Error) -> String {
+        err.to_string()
     }
 
-    fn next_synthetic_audit_id(&mut self) -> String {
-        self.synthetic_audit_counter += 1;
-        format!("audit-local-{:06}", self.synthetic_audit_counter)
+    fn read_sessions(&self) -> Result<Vec<Session>, String> {
+        self.storage.list_sessions().map_err(Self::io_err)
+    }
+
+    fn write_sessions(&self, sessions: &[Session]) -> Result<(), String> {
+        self.storage.write_sessions(sessions).map_err(Self::io_err)
+    }
+
+    fn read_pending_consents(&self) -> Result<Vec<PendingConsentState>, String> {
+        self.storage.read_pending_consents().map_err(Self::io_err)
+    }
+
+    fn write_pending_consents(&self, items: &[PendingConsentState]) -> Result<(), String> {
+        self.storage.write_pending_consents(items).map_err(Self::io_err)
+    }
+
+    fn persist_audit_from_response(&mut self, response: &ChatResponse, provider: &str) {
+        let mut audits = match self.storage.read_audit_entries() {
+            Ok(v) => v,
+            Err(_) => Vec::new(),
+        };
+        let policy_decisions = response
+            .proposed_actions
+            .iter()
+            .map(|evt| {
+                format!(
+                    "{}:{}:{}",
+                    evt.tool_name,
+                    evt.status,
+                    evt.reason.clone().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>();
+        let proposed_tool_calls = response
+            .proposed_actions
+            .iter()
+            .map(|evt| evt.tool_name.clone())
+            .collect::<Vec<_>>();
+        let evidence_summaries = response
+            .executed_action_events
+            .iter()
+            .filter_map(|evt| evt.evidence_summary.clone())
+            .collect::<Vec<_>>();
+        audits.push(AuditEntry {
+            audit_id: response.audit_id.clone(),
+            timestamp_unix_seconds: Self::now_secs(),
+            session_id: response.session_id.clone(),
+            provider: provider.to_string(),
+            policy_decisions,
+            proposed_tool_calls,
+            executed_actions: response.actions_executed.clone(),
+            evidence_summaries,
+        });
+        let _ = self.storage.write_audit_entries(&audits);
+    }
+
+    fn attach_or_create_consent(
+        &mut self,
+        request: &ChatRequest,
+        response: &mut ChatResponse,
+    ) -> Result<(), String> {
+        let pending_events = response
+            .proposed_actions
+            .iter()
+            .filter(|evt| evt.status == "consent_required")
+            .cloned()
+            .collect::<Vec<_>>();
+        if pending_events.is_empty() {
+            response.consent_token = None;
+            response.consent_request = None;
+            return Ok(());
+        }
+        let mut items = self.read_pending_consents()?;
+        let timestamp = Self::now_secs();
+        let first = &pending_events[0];
+        let consent_id = self.next_consent_id();
+        items.push(PendingConsentState {
+            record: PendingConsentRecord {
+                consent_id: consent_id.clone(),
+                session_id: request.session_id.clone(),
+                requested_at_unix_seconds: timestamp,
+                tool_name: first.tool_name.clone(),
+                capability_tier: first.capability_tier.clone(),
+                status: "pending".to_string(),
+                rationale: first
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "explicit consent required".to_string()),
+                arguments_preview: first.arguments_preview.clone(),
+                request_fingerprint: response.request_fingerprint.clone(),
+            },
+            chat_request: request.clone(),
+        });
+        self.write_pending_consents(&items)?;
+        response.consent_token = Some(consent_id);
+        response.consent_request = Some(build_consent_request(&response.proposed_actions));
+        Ok(())
+    }
+
+    fn mark_or_find_pending_consent(
+        &mut self,
+        consent_id: &str,
+        new_status: &str,
+    ) -> Result<PendingConsentState, String> {
+        let mut items = self.read_pending_consents()?;
+        let idx = items
+            .iter()
+            .position(|item| item.record.consent_id == consent_id)
+            .ok_or_else(|| "unknown or expired consent_id".to_string())?;
+        if items[idx].record.status != "pending" {
+            return Err("consent_id is no longer pending".to_string());
+        }
+        items[idx].record.status = new_status.to_string();
+        let out = items[idx].clone();
+        self.write_pending_consents(&items)?;
+        Ok(out)
+    }
+
+    fn response_for_denial(&mut self, pending: &PendingConsentState, provider_name: &str) -> ChatResponse {
+        let audit_id = self.next_synthetic_audit_id();
+        let event = ActionEvent {
+            tool_name: pending.record.tool_name.clone(),
+            capability_tier: pending.record.capability_tier.clone(),
+            status: "denied".to_string(),
+            reason: Some(pending.record.rationale.clone()),
+            arguments_preview: pending.record.arguments_preview.clone(),
+            evidence_summary: None,
+        };
+        let response = ChatResponse {
+            final_text: "User denied consent for requested actions.".to_string(),
+            audit_id,
+            request_fingerprint: pending.record.request_fingerprint.clone(),
+            consent_token: None,
+            session_id: pending.record.session_id.clone(),
+            consent_request: None,
+            actions_executed: vec![format!(
+                "denied:{}:{}",
+                pending.record.tool_name, pending.record.rationale
+            )],
+            proposed_actions: vec![event.clone()],
+            executed_action_events: vec![],
+            action_events: vec![event],
+        };
+        self.persist_audit_from_response(&response, provider_name);
+        response
+    }
+
+    fn append_messages_to_session_if_requested(&mut self, request: &ChatRequest) {
+        let Some(session_id) = &request.session_id else {
+            return;
+        };
+        let mut sessions = match self.storage.list_sessions() {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        if let Some(s) = sessions.iter_mut().find(|s| &s.id == session_id) {
+            s.messages.extend(request.messages.clone());
+            s.updated_at_unix_seconds = Self::now_secs();
+            let _ = self.storage.write_sessions(&sessions);
+        }
+    }
+
+    fn provider_state(&self) -> Result<ProviderState, String> {
+        self.storage.read_provider_state().map_err(Self::io_err)
+    }
+
+    fn write_provider_state(&self, state: &ProviderState) -> Result<(), String> {
+        self.storage.write_provider_state(state).map_err(Self::io_err)
     }
 }
 
 impl ChatService for AgentService {
-    fn chat_request(&mut self, params: ChatRequest) -> ChatResponse {
-        self.rebuild_orchestrator(&params.provider_config.provider_name);
-        let mut response = self
-            .orchestrator
-            .run(params.messages.clone(), params.provider_config.clone(), params.mode.clone());
-        if response
-            .proposed_actions
-            .iter()
-            .any(|evt| evt.status == "consent_required")
-        {
-            response.consent_token = Some(self.issue_consent_token(params));
-            response.consent_request = Some(build_consent_request(&response.proposed_actions));
+    fn chat_request(&mut self, mut params: ChatRequest) -> ChatResponse {
+        if params.provider_config.provider_name.trim().is_empty() {
+            if let Ok(state) = self.provider_state() {
+                if let Some(active) = state.active_provider {
+                    params.provider_config.provider_name = active;
+                }
+            }
         }
+        self.append_messages_to_session_if_requested(&params);
+        self.rebuild_orchestrator(&params.provider_config.provider_name);
+        let mut response = self.orchestrator.run(
+            params.messages.clone(),
+            params.provider_config.clone(),
+            params.mode.clone(),
+        );
+        response.audit_id = self.next_synthetic_audit_id();
+        response.session_id = params.session_id.clone();
+        let _ = self.attach_or_create_consent(&params, &mut response);
+        self.persist_audit_from_response(&response, &params.provider_config.provider_name);
         response
     }
 
     fn chat_approve(&mut self, params: ChatApproveRequest) -> Result<ChatResponse, String> {
-        let request = self
-            .pending_approvals
-            .remove(&params.consent_token)
-            .ok_or_else(|| "unknown or expired consent_token".to_string())?;
-        self.rebuild_orchestrator(&request.provider_config.provider_name);
-        Ok(self.orchestrator.run_with_confirmation(
-            request.messages,
-            request.provider_config,
-            request.mode,
-            true,
-        ))
+        let pending = self.mark_or_find_pending_consent(&params.consent_token, "approved")?;
+        let req = pending.chat_request.clone();
+        self.rebuild_orchestrator(&req.provider_config.provider_name);
+        let mut response =
+            self.orchestrator
+                .run_with_confirmation(req.messages, req.provider_config.clone(), req.mode, true);
+        response.audit_id = self.next_synthetic_audit_id();
+        response.session_id = pending.record.session_id.clone();
+        response.consent_token = None;
+        response.consent_request = None;
+        self.persist_audit_from_response(&response, &req.provider_config.provider_name);
+        Ok(response)
     }
 
     fn chat_deny(&mut self, params: ChatDenyRequest) -> Result<ChatResponse, String> {
-        let request = self
-            .pending_approvals
-            .remove(&params.consent_token)
-            .ok_or_else(|| "unknown or expired consent_token".to_string())?;
+        let pending = self.mark_or_find_pending_consent(&params.consent_token, "denied")?;
+        Ok(self.response_for_denial(
+            &pending,
+            &pending.chat_request.provider_config.provider_name,
+        ))
+    }
 
-        self.rebuild_orchestrator(&request.provider_config.provider_name);
-        let mut response = self
-            .orchestrator
-            .run(request.messages.clone(), request.provider_config.clone(), request.mode.clone());
+    fn sessions_create(&mut self, params: SessionCreateRequest) -> Result<Session, String> {
+        let mut sessions = self.read_sessions()?;
+        let now = Self::now_secs();
+        let title = params
+            .title
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| format!("Session {}", self.session_counter + 1));
+        let session = Session {
+            id: self.next_session_id(),
+            created_at_unix_seconds: now,
+            updated_at_unix_seconds: now,
+            title,
+            messages: vec![],
+        };
+        sessions.push(session.clone());
+        self.write_sessions(&sessions)?;
+        Ok(session)
+    }
 
-        let mut denied_any = false;
-        for evt in &mut response.proposed_actions {
-            if evt.status == "consent_required" {
-                evt.status = "denied".to_string();
-                if evt.reason.is_none() {
-                    evt.reason = Some("Denied by user".to_string());
+    fn sessions_list(&self) -> Result<Vec<SessionSummary>, String> {
+        let mut sessions = self.read_sessions()?;
+        sessions.sort_by_key(|s| s.updated_at_unix_seconds);
+        sessions.reverse();
+        Ok(sessions
+            .into_iter()
+            .map(|s| SessionSummary {
+                id: s.id,
+                title: s.title,
+                created_at_unix_seconds: s.created_at_unix_seconds,
+                updated_at_unix_seconds: s.updated_at_unix_seconds,
+                message_count: s.messages.len(),
+            })
+            .collect())
+    }
+
+    fn sessions_get(&self, params: SessionGetRequest) -> Result<Session, String> {
+        self.read_sessions()?
+            .into_iter()
+            .find(|s| s.id == params.session_id)
+            .ok_or_else(|| "session not found".to_string())
+    }
+
+    fn sessions_delete(&mut self, params: SessionDeleteRequest) -> Result<SessionDeleteResponse, String> {
+        let mut sessions = self.read_sessions()?;
+        let before = sessions.len();
+        sessions.retain(|s| s.id != params.session_id);
+        self.write_sessions(&sessions)?;
+        Ok(SessionDeleteResponse {
+            deleted: sessions.len() != before,
+        })
+    }
+
+    fn sessions_messages_append(
+        &mut self,
+        params: SessionMessagesAppendRequest,
+    ) -> Result<SessionMessagesAppendResponse, String> {
+        let mut sessions = self.read_sessions()?;
+        let session = sessions
+            .iter_mut()
+            .find(|s| s.id == params.session_id)
+            .ok_or_else(|| "session not found".to_string())?;
+        session.messages.extend(params.messages);
+        session.updated_at_unix_seconds = Self::now_secs();
+        let out = session.clone();
+        self.write_sessions(&sessions)?;
+        Ok(SessionMessagesAppendResponse { session: out })
+    }
+
+    fn providers_list(&self) -> Result<Vec<ProviderInfo>, String> {
+        let state = self.provider_state().unwrap_or_default();
+        let names = ["openai-stub", "anthropic-stub", "gemini-stub"];
+        Ok(names
+            .iter()
+            .map(|name| {
+                let cfg = state.configs.get(*name).cloned().unwrap_or_else(|| "{}".to_string());
+                let has_auth = provider_config_has_auth(name, &cfg);
+                ProviderInfo {
+                    name: (*name).to_string(),
+                    enabled: true,
+                    is_active: state.active_provider.as_deref() == Some(*name),
+                    has_auth,
+                    config_summary: if has_auth {
+                        "configured".to_string()
+                    } else {
+                        "not configured".to_string()
+                    },
                 }
-                denied_any = true;
-            }
-        }
-        if denied_any {
-            response.final_text = "User denied consent for requested actions.".to_string();
-            response.consent_token = None;
-            response.consent_request = None;
-            response.actions_executed = response
-                .proposed_actions
-                .iter()
-                .filter(|evt| evt.status == "denied")
-                .map(|evt| {
-                    format!(
-                        "denied:{}:{}",
-                        evt.tool_name,
-                        evt.reason.clone().unwrap_or_else(|| "Denied by user".to_string())
-                    )
-                })
-                .collect();
-            response.executed_action_events.clear();
-            response.action_events = response.proposed_actions.clone();
-            response.audit_id = self.next_synthetic_audit_id();
-        }
+            })
+            .collect())
+    }
 
+    fn providers_set(&mut self, params: ProvidersSetRequest) -> Result<ProviderInfo, String> {
+        let mut state = self.provider_state().unwrap_or_default();
+        state.active_provider = Some(params.provider_name.clone());
+        self.write_provider_state(&state)?;
+        self.providers_list()?
+            .into_iter()
+            .find(|p| p.name == params.provider_name)
+            .ok_or_else(|| "provider not found".to_string())
+    }
+
+    fn providers_config_get(&self, params: ProviderConfigGetRequest) -> Result<ProviderConfigRecord, String> {
+        let state = self.provider_state().unwrap_or_default();
+        let provider_name = params
+            .provider_name
+            .or_else(|| state.active_provider.clone())
+            .unwrap_or_else(|| "openai-stub".to_string());
+        Ok(ProviderConfigRecord {
+            provider_name: provider_name.clone(),
+            is_active: state.active_provider.as_deref() == Some(provider_name.as_str()),
+            config_json: state
+                .configs
+                .get(&provider_name)
+                .cloned()
+                .unwrap_or_else(|| "{}".to_string()),
+        })
+    }
+
+    fn providers_config_set(
+        &mut self,
+        params: ProviderConfigSetRequest,
+    ) -> Result<ProviderConfigSetResponse, String> {
+        let mut state = self.provider_state().unwrap_or_default();
+        state
+            .configs
+            .insert(params.provider_name.clone(), params.config_json.clone());
+        if state.active_provider.is_none() {
+            state.active_provider = Some(params.provider_name.clone());
+        }
+        self.write_provider_state(&state)?;
+        Ok(ProviderConfigSetResponse {
+            provider_name: params.provider_name.clone(),
+            has_auth: provider_config_has_auth(&params.provider_name, &params.config_json),
+        })
+    }
+
+    fn mcp_servers_list(&self) -> Result<Vec<McpServerRecord>, String> {
+        self.storage.read_mcp_servers().map_err(Self::io_err)
+    }
+
+    fn mcp_servers_add(&mut self, params: McpServerAddRequest) -> Result<McpServerMutationResponse, String> {
+        let mut items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let record = McpServerRecord {
+            id: self.next_mcp_id(),
+            name: params.name,
+            command: params.command,
+            args: params.args,
+            status: "stopped".to_string(),
+        };
+        items.push(record.clone());
+        self.storage.write_mcp_servers(&items).map_err(Self::io_err)?;
+        Ok(McpServerMutationResponse {
+            ok: true,
+            server: Some(record),
+        })
+    }
+
+    fn mcp_servers_remove(
+        &mut self,
+        params: McpServerRemoveRequest,
+    ) -> Result<McpServerMutationResponse, String> {
+        let mut items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let mut removed = None;
+        items.retain(|s| {
+            if s.id == params.server_id {
+                removed = Some(s.clone());
+                false
+            } else {
+                true
+            }
+        });
+        self.storage.write_mcp_servers(&items).map_err(Self::io_err)?;
+        Ok(McpServerMutationResponse {
+            ok: removed.is_some(),
+            server: removed,
+        })
+    }
+
+    fn mcp_servers_start(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String> {
+        self.set_mcp_server_status(&params.server_id, "running")
+    }
+
+    fn mcp_servers_stop(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String> {
+        self.set_mcp_server_status(&params.server_id, "stopped")
+    }
+
+    fn project_open(&mut self, params: ProjectOpenRequest) -> Result<ProjectOpenResponse, String> {
+        let path = Path::new(&params.path);
+        let response = ProjectOpenResponse {
+            path: params.path.clone(),
+            exists: path.exists(),
+            is_dir: path.is_dir(),
+        };
+        if response.exists && response.is_dir {
+            self.storage
+                .write_project_state(&ProjectState {
+                    open_path: Some(params.path),
+                })
+                .map_err(Self::io_err)?;
+        }
         Ok(response)
+    }
+
+    fn project_status(&self, params: ProjectStatusRequest) -> Result<ProjectStatusResponse, String> {
+        let project = self.storage.read_project_state().map_err(Self::io_err)?;
+        let path = params
+            .path
+            .or(project.open_path)
+            .unwrap_or_else(|| ".".to_string());
+        let exists = Path::new(&path).exists();
+        let is_dir = Path::new(&path).is_dir();
+        let entry_count = if is_dir {
+            std::fs::read_dir(Path::new(&path))
+                .ok()
+                .map(|it| it.filter_map(Result::ok).count())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        Ok(ProjectStatusResponse {
+            path,
+            exists,
+            is_dir,
+            entry_count,
+        })
+    }
+
+    fn audit_list(&self, params: AuditListRequest) -> Result<Vec<AuditEntry>, String> {
+        let mut items = self.storage.read_audit_entries().map_err(Self::io_err)?;
+        if let Some(session_id) = params.session_id {
+            items.retain(|a| a.session_id.as_deref() == Some(session_id.as_str()));
+        }
+        items.sort_by_key(|a| a.timestamp_unix_seconds);
+        items.reverse();
+        if let Some(limit) = params.limit {
+            items.truncate(limit);
+        }
+        Ok(items)
+    }
+
+    fn audit_get(&self, params: AuditGetRequest) -> Result<AuditEntry, String> {
+        self.storage
+            .read_audit_entries()
+            .map_err(Self::io_err)?
+            .into_iter()
+            .find(|a| a.audit_id == params.audit_id)
+            .ok_or_else(|| "audit entry not found".to_string())
+    }
+
+    fn consent_list(&self, params: ConsentListRequest) -> Result<Vec<PendingConsentRecord>, String> {
+        let mut items = self
+            .storage
+            .read_pending_consents()
+            .map_err(Self::io_err)?
+            .into_iter()
+            .map(|x| x.record)
+            .collect::<Vec<_>>();
+        if let Some(status) = params.status {
+            items.retain(|c| c.status == status);
+        }
+        if let Some(session_id) = params.session_id {
+            items.retain(|c| c.session_id.as_deref() == Some(session_id.as_str()));
+        }
+        items.sort_by_key(|c| c.requested_at_unix_seconds);
+        items.reverse();
+        Ok(items)
+    }
+
+    fn consent_approve(&mut self, params: ConsentActionRequest) -> Result<ChatResponse, String> {
+        self.chat_approve(ChatApproveRequest {
+            consent_token: params.consent_id,
+        })
+    }
+
+    fn consent_deny(&mut self, params: ConsentActionRequest) -> Result<ChatResponse, String> {
+        self.chat_deny(ChatDenyRequest {
+            consent_token: params.consent_id,
+        })
     }
 
     fn tools_list(&self) -> Vec<Tool> {
         self.tool_registry.list()
     }
+}
+
+impl AgentService {
+    fn set_mcp_server_status(
+        &mut self,
+        server_id: &str,
+        status: &str,
+    ) -> Result<McpServerMutationResponse, String> {
+        let mut items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let mut updated = None;
+        for item in &mut items {
+            if item.id == server_id {
+                item.status = status.to_string();
+                updated = Some(item.clone());
+                break;
+            }
+        }
+        self.storage.write_mcp_servers(&items).map_err(Self::io_err)?;
+        Ok(McpServerMutationResponse {
+            ok: updated.is_some(),
+            server: updated,
+        })
+    }
+}
+
+fn provider_config_has_auth(provider_name: &str, config_json: &str) -> bool {
+    let key_fields = match provider_name {
+        "anthropic-stub" => &["api_key", "token"][..],
+        "gemini-stub" => &["api_key", "token"][..],
+        _ => &["api_key", "token"][..],
+    };
+    let parsed = serde_json::from_str::<serde_json::Value>(config_json).ok();
+    key_fields.iter().any(|field| {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(*field))
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    })
 }
 
 fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
@@ -147,10 +700,7 @@ fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
         .filter(|evt| evt.status == "consent_required")
         .collect();
     let requires_extra_confirmation_click = pending.iter().any(|evt| {
-        matches!(
-            evt.capability_tier.as_str(),
-            "LocalActions" | "SystemActions"
-        )
+        matches!(evt.capability_tier.as_str(), "LocalActions" | "SystemActions")
     });
 
     let mut risk_factors = Vec::new();
@@ -163,7 +713,10 @@ fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
     if pending.len() > 1 {
         risk_factors.push("multiple_actions_requested".to_string());
     }
-    if pending.iter().any(|evt| evt.arguments_preview.as_deref().map(|s| s.len()).unwrap_or(0) > 0) {
+    if pending
+        .iter()
+        .any(|evt| evt.arguments_preview.as_deref().map(|s| !s.is_empty()).unwrap_or(false))
+    {
         risk_factors.push("external_arguments_present".to_string());
     }
 
@@ -186,5 +739,73 @@ fn build_consent_request(proposed_actions: &[ActionEvent]) -> ConsentRequest {
         human_summary,
         risk_factors,
         requires_extra_confirmation_click,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipc::jsonrpc::{Id, Request};
+    use ipc::{AuditListRequest, JsonRpcServer};
+    use tempfile::tempdir;
+
+    #[test]
+    fn consent_lifecycle_approve_continues_and_records_audit() {
+        let dir = tempdir().expect("tempdir");
+        let service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let mut server = JsonRpcServer::new(service);
+
+        let chat_req = ipc::ChatRequest {
+            session_id: None,
+            messages: vec![ipc::ChatMessage {
+                role: "user".to_string(),
+                content: "tool:activate Browser".to_string(),
+            }],
+            provider_config: ipc::ProviderConfig {
+                provider_name: "openai-stub".to_string(),
+                model: None,
+            },
+            mode: ipc::ChatMode::RequireConfirmation,
+        };
+        let raw = server.handle(Request::new(
+            Id::Number(1),
+            "chat.request",
+            serde_json::to_string(&chat_req).expect("serialize"),
+        ));
+        let first: ipc::ChatResponse = serde_json::from_str(
+            raw.result_json.as_deref().expect("result"),
+        )
+        .expect("chat response");
+        let consent_id = first.consent_token.clone().expect("consent token");
+        assert!(first
+            .proposed_actions
+            .iter()
+            .any(|a| a.status == "consent_required"));
+
+        let raw2 = server.handle(Request::new(
+            Id::Number(2),
+            "chat.approve",
+            serde_json::to_string(&ipc::ChatApproveRequest {
+                consent_token: consent_id,
+            })
+            .expect("serialize"),
+        ));
+        let second: ipc::ChatResponse = serde_json::from_str(
+            raw2.result_json.as_deref().expect("result"),
+        )
+        .expect("chat response");
+        assert!(second
+            .executed_action_events
+            .iter()
+            .any(|a| a.status == "executed"));
+
+        let audits = server
+            .service()
+            .audit_list(AuditListRequest {
+                session_id: None,
+                limit: Some(10),
+            })
+            .expect("audit list");
+        assert!(audits.len() >= 2);
     }
 }

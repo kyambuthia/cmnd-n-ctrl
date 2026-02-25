@@ -34,6 +34,16 @@ impl ToolRegistry {
                     description: "Open a URL using the platform shell (stubbed)".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}".to_string(),
                 },
+                Tool {
+                    name: "desktop.app.list".to_string(),
+                    description: "List desktop applications/windows (stubbed)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"filter\":{\"type\":\"string\"}},\"additionalProperties\":false}".to_string(),
+                },
+                Tool {
+                    name: "desktop.app.activate".to_string(),
+                    description: "Activate/focus a desktop application/window (stubbed)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"app\":{\"type\":\"string\"}},\"required\":[\"app\"]}".to_string(),
+                },
             ],
         }
     }

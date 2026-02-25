@@ -4,6 +4,7 @@ const currentActionBodyEl = document.querySelector('#currentActionBody');
 const currentActionMetaEl = document.querySelector('#currentActionMeta');
 const activityHistoryEl = document.querySelector('#activityHistory');
 const auditEl = document.querySelector('#audit');
+const workspaceStateEl = document.querySelector('#workspaceState');
 const actionsEl = document.querySelector('#actions');
 const actionChipsEl = document.querySelector('#actionChips');
 const rawEl = document.querySelector('#raw');
@@ -14,6 +15,12 @@ const debugToggleBtn = document.querySelector('#debugToggle');
 const requireConfirmationEl = document.querySelector('#requireConfirmation');
 const sendBtn = document.querySelector('#send');
 const listToolsBtn = document.querySelector('#listTools');
+const newSessionBtn = document.querySelector('#newSession');
+const listSessionsBtn = document.querySelector('#listSessions');
+const listProvidersBtn = document.querySelector('#listProviders');
+const listConsentsBtn = document.querySelector('#listConsents');
+const listAuditBtn = document.querySelector('#listAudit');
+const sessionIdEl = document.querySelector('#sessionId');
 const clearViewBtn = document.querySelector('#clearView');
 const consentCardEl = document.querySelector('#consentCard');
 const consentSummaryEl = document.querySelector('#consentSummary');
@@ -43,6 +50,12 @@ function setStatus(message) {
 
 function setRaw(payload) {
   rawEl.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+}
+
+function setWorkspaceState(payload) {
+  if (!workspaceStateEl) return;
+  workspaceStateEl.textContent =
+    typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
 }
 
 function setCurrentAction(kind, label, body, meta = []) {
@@ -363,6 +376,7 @@ function renderToolsResult(result) {
   const names = result.map((t) => t.name);
   setCurrentAction('event', `Tools Available (${result.length})`, names.join('\n'), ['registry']);
   pushHistory('event', `Tools Available (${result.length})`, names.join(', '));
+  setWorkspaceState({ tools: result });
 }
 
 function renderJsonRpcResponse(payload) {
@@ -409,8 +423,10 @@ async function runChatRequest(modeOverride) {
     prompt,
     providerConfig: { provider_name: 'openai-stub', model: null },
   };
+  const sessionId = sessionIdEl && typeof sessionIdEl.value === 'string' ? sessionIdEl.value.trim() : '';
 
   const json = await callJsonRpc('chat.request', {
+    session_id: sessionId || null,
     messages: [{ role: 'user', content: prompt }],
     provider_config: lastChatContext.providerConfig,
     mode: modeOverride || (requireConfirmationEl.checked ? 'RequireConfirmation' : 'BestEffort'),
@@ -424,6 +440,56 @@ async function runToolsList() {
   setCurrentAction('event', 'Loading Tool Registry', 'Fetching available tools...', ['registry']);
   const json = await callJsonRpc('tools.list', {});
   renderJsonRpcResponse(json);
+}
+
+async function runSessionsList() {
+  const json = await callJsonRpc('sessions.list', {});
+  setRaw(json);
+  if (json && json.result) setWorkspaceState({ sessions: json.result });
+  const sessions = Array.isArray(json && json.result) ? json.result : [];
+  setCurrentAction('event', `Sessions (${sessions.length})`, sessions.map((s) => s.id).join('\n') || '(none)', ['sessions']);
+  setStatus('Session list received');
+}
+
+async function runNewSession() {
+  const json = await callJsonRpc('sessions.create', { title: null });
+  setRaw(json);
+  const result = json && json.result ? json.result : null;
+  if (result && result.id && sessionIdEl) {
+    sessionIdEl.value = String(result.id);
+  }
+  setWorkspaceState({ newSession: result });
+  setCurrentAction('event', 'Session Created', result && result.id ? String(result.id) : 'unknown', ['sessions']);
+  setStatus('Session created');
+}
+
+async function runProvidersList() {
+  const json = await callJsonRpc('providers.list', {});
+  setRaw(json);
+  if (json && json.result) setWorkspaceState({ providers: json.result });
+  const providers = Array.isArray(json && json.result) ? json.result : [];
+  setCurrentAction('event', `Providers (${providers.length})`, providers.map((p) => `${p.name} ${p.is_active ? '(active)' : ''}`).join('\n'), ['providers']);
+  setStatus('Provider list received');
+}
+
+async function runConsentQueue() {
+  const sessionId = sessionIdEl && typeof sessionIdEl.value === 'string' ? sessionIdEl.value.trim() : '';
+  const json = await callJsonRpc('consent.list', { status: 'pending', session_id: sessionId || null });
+  setRaw(json);
+  if (json && json.result) setWorkspaceState({ approvals: json.result });
+  const consents = Array.isArray(json && json.result) ? json.result : [];
+  setCurrentAction('event', `Approvals Queue (${consents.length})`, consents.map((c) => `${c.consent_id}: ${c.tool_name}`).join('\n') || '(empty)', ['consent-queue']);
+  setStatus('Approvals queue received');
+}
+
+async function runAuditList() {
+  const sessionId = sessionIdEl && typeof sessionIdEl.value === 'string' ? sessionIdEl.value.trim() : '';
+  const json = await callJsonRpc('audit.list', { session_id: sessionId || null, limit: 20 });
+  setRaw(json);
+  if (json && json.result) setWorkspaceState({ audit: json.result });
+  const audits = Array.isArray(json && json.result) ? json.result : [];
+  setCurrentAction('event', `Audit (${audits.length})`, audits.map((a) => `${a.audit_id} ${a.provider}`).join('\n') || '(empty)', ['audit']);
+  setStatus('Audit list received');
 }
 
 async function approvePendingConsent() {
@@ -474,6 +540,11 @@ async function withUiBusy(action) {
   sendBtn.disabled = true;
   listToolsBtn.disabled = true;
   clearViewBtn.disabled = true;
+  if (newSessionBtn) newSessionBtn.disabled = true;
+  if (listSessionsBtn) listSessionsBtn.disabled = true;
+  if (listProvidersBtn) listProvidersBtn.disabled = true;
+  if (listConsentsBtn) listConsentsBtn.disabled = true;
+  if (listAuditBtn) listAuditBtn.disabled = true;
   approveConsentBtn.disabled = true;
   denyConsentBtn.disabled = true;
 
@@ -489,6 +560,11 @@ async function withUiBusy(action) {
     sendBtn.disabled = false;
     listToolsBtn.disabled = false;
     clearViewBtn.disabled = false;
+    if (newSessionBtn) newSessionBtn.disabled = false;
+    if (listSessionsBtn) listSessionsBtn.disabled = false;
+    if (listProvidersBtn) listProvidersBtn.disabled = false;
+    if (listConsentsBtn) listConsentsBtn.disabled = false;
+    if (listAuditBtn) listAuditBtn.disabled = false;
     approveConsentBtn.disabled = false;
     denyConsentBtn.disabled = false;
   }
@@ -573,8 +649,35 @@ clearViewBtn.addEventListener('click', () => {
   clearHistory();
   setCurrentAction('event', 'Ready', 'No actions yet.', ['idle']);
   setRaw('No requests yet.');
+  setWorkspaceState('(no workspace data loaded)');
   setStatus('Cleared');
 });
+
+if (newSessionBtn) {
+  newSessionBtn.addEventListener('click', async () => {
+    await withUiBusy(runNewSession);
+  });
+}
+if (listSessionsBtn) {
+  listSessionsBtn.addEventListener('click', async () => {
+    await withUiBusy(runSessionsList);
+  });
+}
+if (listProvidersBtn) {
+  listProvidersBtn.addEventListener('click', async () => {
+    await withUiBusy(runProvidersList);
+  });
+}
+if (listConsentsBtn) {
+  listConsentsBtn.addEventListener('click', async () => {
+    await withUiBusy(runConsentQueue);
+  });
+}
+if (listAuditBtn) {
+  listAuditBtn.addEventListener('click', async () => {
+    await withUiBusy(runAuditList);
+  });
+}
 
 approveConsentBtn.addEventListener('click', async () => {
   await withUiBusy(approvePendingConsent);
