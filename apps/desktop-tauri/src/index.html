@@ -112,6 +112,40 @@
         white-space: pre-wrap;
         line-height: 1.45;
       }
+      .events {
+        display: grid;
+        gap: 0.6rem;
+      }
+      .event {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 0.7rem;
+        background: #171717;
+      }
+      .event .label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 0.3rem;
+      }
+      .event .body {
+        white-space: pre-wrap;
+        line-height: 1.35;
+      }
+      .event.consent {
+        border-color: rgba(242, 177, 52, 0.45);
+        background: linear-gradient(180deg, rgba(242,177,52,0.08), rgba(216,95,54,0.06));
+      }
+      .event.ok {
+        border-color: rgba(119, 196, 123, 0.35);
+      }
+      .event.warn {
+        border-color: rgba(216,95,54,0.35);
+      }
+      .hidden {
+        display: none !important;
+      }
       .list {
         margin: 0;
         padding-left: 1rem;
@@ -302,8 +336,22 @@
           <div class="chat-scroll">
             <div class="stack">
               <div class="card">
-                <h2>Assistant Reply</h2>
-                <div id="response" class="response">No response yet.</div>
+                <h2>Action Activity</h2>
+                <div id="activityFeed" class="events">
+                  <div class="event">
+                    <div class="label">Ready</div>
+                    <div class="body">No actions yet.</div>
+                  </div>
+                </div>
+              </div>
+              <div id="consentCard" class="card hidden">
+                <h2>Consent Required</h2>
+                <div id="consentSummary" class="message">The assistant requested an action that needs approval.</div>
+                <div id="consentRequested" class="chips" style="margin-top:0.6rem;"></div>
+                <div class="row">
+                  <button id="approveConsent" type="button">Approve Once</button>
+                  <button id="denyConsent" class="secondary" type="button">Deny</button>
+                </div>
               </div>
               <div class="card">
                 <h2>Status</h2>
