@@ -1,0 +1,5 @@
+[build]
+# Keep Cargo artifacts out of the repo working tree by default.
+# This relative path is resolved from the command working directory (repo root in typical usage),
+# which places artifacts under a sibling directory outside the repo (e.g. `~/ .cmnd-n-ctrl-target` here).
+target-dir = "../../.cmnd-n-ctrl-target"
