@@ -16,6 +16,7 @@ use ipc::{
 use providers::ProviderChoice;
 use std::env;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use storage::{FileStorage, PendingConsentState, ProjectState, ProviderState, Storage};
 
@@ -142,11 +143,18 @@ impl AgentService {
 
     fn rebuild_orchestrator(&mut self, provider_name: &str) {
         let provider = ProviderChoice::by_name(provider_name);
+        let project_root = self
+            .storage
+            .read_project_state()
+            .ok()
+            .and_then(|s| s.open_path)
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
         self.orchestrator = Orchestrator::new(
             Policy::default(),
             self.tool_registry.clone(),
             provider,
-            StubActionBackend::new(self.platform),
+            StubActionBackend::with_project_root(self.platform, project_root),
         );
     }
 
@@ -778,7 +786,8 @@ fn build_consent_request(
 mod tests {
     use super::*;
     use ipc::jsonrpc::{Id, Request};
-    use ipc::{AuditListRequest, JsonRpcServer};
+    use ipc::{AuditListRequest, JsonRpcServer, ProjectOpenRequest};
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -939,5 +948,35 @@ mod tests {
         ));
         let err = expired.error.expect("json-rpc error");
         assert!(err.message.contains("consent_expired"));
+    }
+
+    #[test]
+    fn file_read_text_uses_project_scope() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(dir.path().join("notes.txt"), "hello project\n").expect("write file");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        service
+            .project_open(ProjectOpenRequest {
+                path: dir.path().display().to_string(),
+            })
+            .expect("project open");
+
+        let response = service.chat_request(ipc::ChatRequest {
+            session_id: None,
+            messages: vec![ipc::ChatMessage {
+                role: "user".to_string(),
+                content: "tool:cat notes.txt".to_string(),
+            }],
+            provider_config: ipc::ProviderConfig {
+                provider_name: "openai-stub".to_string(),
+                model: None,
+            },
+            mode: ipc::ChatMode::BestEffort,
+        });
+
+        assert!(response
+            .executed_action_events
+            .iter()
+            .any(|a| a.tool_name == "file.read_text" && a.status == "executed"));
     }
 }

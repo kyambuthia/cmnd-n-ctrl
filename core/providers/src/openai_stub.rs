@@ -55,6 +55,46 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         }
     }
 
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:ls") {
+        if has_tool(tools, "file.list") {
+            let path = rest.trim();
+            return Some(ToolCall {
+                name: "file.list".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "." } else { path }
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:cat") {
+        if has_tool(tools, "file.read_text") {
+            let path = rest.trim();
+            return Some(ToolCall {
+                name: "file.read_text".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "README.md" } else { path }
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:csv") {
+        if has_tool(tools, "file.read_csv") {
+            let path = rest.trim();
+            return Some(ToolCall {
+                name: "file.read_csv".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "data.csv" } else { path },
+                    "limit": 10
+                })
+                .to_string(),
+            });
+        }
+    }
+
     if prompt.to_ascii_lowercase().contains("tool:apps") && has_tool(tools, "desktop.app.list") {
         return Some(ToolCall {
             name: "desktop.app.list".to_string(),

@@ -30,6 +30,21 @@ impl ToolRegistry {
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}".to_string(),
                 },
                 Tool {
+                    name: "file.list".to_string(),
+                    description: "List files in the current project (read-only)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"additionalProperties\":false}".to_string(),
+                },
+                Tool {
+                    name: "file.read_text".to_string(),
+                    description: "Read a text file from the current project (read-only)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}".to_string(),
+                },
+                Tool {
+                    name: "file.read_csv".to_string(),
+                    description: "Read a CSV file from the current project (read-only, preview rows)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1}},\"required\":[\"path\"]}".to_string(),
+                },
+                Tool {
                     name: "desktop.open_url".to_string(),
                     description: "Open a URL using the platform shell (stubbed)".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}".to_string(),

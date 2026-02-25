@@ -438,6 +438,18 @@
             </section>
 
             <section class="sidebar-card">
+              <h2>Project</h2>
+              <div class="field">
+                <label for="projectPath">Project Root</label>
+                <input id="projectPath" type="text" placeholder="." />
+              </div>
+              <div class="stack-btns" style="margin-top:0.65rem;">
+                <button id="openProject" class="secondary" type="button">Open Project</button>
+                <button id="projectStatus" class="ghost" type="button">Project Status</button>
+              </div>
+            </section>
+
+            <section class="sidebar-card">
               <h2>Workflow</h2>
               <div class="stack-btns">
                 <button id="newSession" class="secondary" type="button">New Session</button>
@@ -455,6 +467,8 @@
                 <button class="ghost prompt-preset" type="button" data-prompt="tool:time">Time</button>
                 <button class="ghost prompt-preset" type="button" data-prompt="tool:add 2 3">Add 2 + 3</button>
                 <button class="ghost prompt-preset" type="button" data-prompt="tool:upper hello world">Uppercase</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="tool:ls .">List Files</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="tool:cat README.md">Read File</button>
                 <button class="ghost prompt-preset" type="button" data-prompt="tool:open https://example.com">Open URL (consent)</button>
               </div>
             </section>

@@ -44,6 +44,7 @@ impl Policy {
         if tool_call.name.starts_with("time.")
             || tool_call.name.starts_with("math.")
             || tool_call.name.starts_with("text.")
+            || tool_call.name.starts_with("file.")
             || tool_call.name == "echo"
         {
             CapabilityTier::ReadOnly

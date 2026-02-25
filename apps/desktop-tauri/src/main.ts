@@ -15,6 +15,9 @@ const debugToggleBtn = document.querySelector('#debugToggle');
 const requireConfirmationEl = document.querySelector('#requireConfirmation');
 const sendBtn = document.querySelector('#send');
 const listToolsBtn = document.querySelector('#listTools');
+const openProjectBtn = document.querySelector('#openProject');
+const projectStatusBtn = document.querySelector('#projectStatus');
+const projectPathEl = document.querySelector('#projectPath');
 const newSessionBtn = document.querySelector('#newSession');
 const listSessionsBtn = document.querySelector('#listSessions');
 const listProvidersBtn = document.querySelector('#listProviders');
@@ -519,6 +522,52 @@ async function runAuditList() {
   setStatus('Audit list received');
 }
 
+async function runProjectOpen() {
+  const path =
+    projectPathEl && typeof projectPathEl.value === 'string' && projectPathEl.value.trim()
+      ? projectPathEl.value.trim()
+      : '.';
+  const json = await callJsonRpc('project.open', { path });
+  setRaw(json);
+  if (json && json.result) {
+    setWorkspaceState({ projectOpen: json.result });
+    if (json.result.path && projectPathEl) projectPathEl.value = String(json.result.path);
+    setCurrentAction(
+      json.result.exists && json.result.is_dir ? 'ok' : 'warn',
+      'Project Open',
+      `${json.result.path}\nexists=${json.result.exists}\nis_dir=${json.result.is_dir}`,
+      ['project'],
+    );
+    pushHistory('event', 'Project Open', String(json.result.path || path));
+    setStatus(json.result.exists && json.result.is_dir ? 'Project opened' : 'Project path invalid');
+    return;
+  }
+  setStatus('Project open request completed');
+}
+
+async function runProjectStatus() {
+  const path =
+    projectPathEl && typeof projectPathEl.value === 'string' && projectPathEl.value.trim()
+      ? projectPathEl.value.trim()
+      : null;
+  const json = await callJsonRpc('project.status', { path });
+  setRaw(json);
+  if (json && json.result) {
+    setWorkspaceState({ projectStatus: json.result });
+    if (json.result.path && projectPathEl) projectPathEl.value = String(json.result.path);
+    setCurrentAction(
+      'event',
+      'Project Status',
+      `${json.result.path}\nexists=${json.result.exists}\nis_dir=${json.result.is_dir}\nentries=${json.result.entry_count}`,
+      ['project'],
+    );
+    pushHistory('event', 'Project Status', String(json.result.path || '(unknown)'));
+    setStatus('Project status received');
+    return;
+  }
+  setStatus('Project status request completed');
+}
+
 async function approvePendingConsent() {
   if (!pendingConsent || (!pendingConsentToken && !lastChatContext)) {
     setStatus('No pending consent request');
@@ -572,6 +621,8 @@ async function withUiBusy(action) {
   if (listProvidersBtn) listProvidersBtn.disabled = true;
   if (listConsentsBtn) listConsentsBtn.disabled = true;
   if (listAuditBtn) listAuditBtn.disabled = true;
+  if (openProjectBtn) openProjectBtn.disabled = true;
+  if (projectStatusBtn) projectStatusBtn.disabled = true;
   approveConsentBtn.disabled = true;
   denyConsentBtn.disabled = true;
 
@@ -592,6 +643,8 @@ async function withUiBusy(action) {
     if (listProvidersBtn) listProvidersBtn.disabled = false;
     if (listConsentsBtn) listConsentsBtn.disabled = false;
     if (listAuditBtn) listAuditBtn.disabled = false;
+    if (openProjectBtn) openProjectBtn.disabled = false;
+    if (projectStatusBtn) projectStatusBtn.disabled = false;
     approveConsentBtn.disabled = false;
     denyConsentBtn.disabled = false;
   }
@@ -693,6 +746,16 @@ if (listSessionsBtn) {
 if (listProvidersBtn) {
   listProvidersBtn.addEventListener('click', async () => {
     await withUiBusy(runProvidersList);
+  });
+}
+if (openProjectBtn) {
+  openProjectBtn.addEventListener('click', async () => {
+    await withUiBusy(runProjectOpen);
+  });
+}
+if (projectStatusBtn) {
+  projectStatusBtn.addEventListener('click', async () => {
+    await withUiBusy(runProjectStatus);
   });
 }
 if (listConsentsBtn) {
