@@ -41,6 +41,9 @@ impl Policy {
         if tool_call.name == "desktop.app.list" {
             return CapabilityTier::LocalActions;
         }
+        if tool_call.name == "file.write_text" {
+            return CapabilityTier::LocalActions;
+        }
         if tool_call.name.starts_with("time.")
             || tool_call.name.starts_with("math.")
             || tool_call.name.starts_with("text.")
@@ -109,6 +112,23 @@ mod tests {
         let policy = Policy::default();
         let result = policy.authorize(
             &call("desktop.app.list"),
+            &PolicyContext {
+                mode: ChatMode::BestEffort,
+                user_confirmed: false,
+            },
+        );
+        assert!(matches!(result, Authorization::RequireConfirmation { .. }));
+    }
+
+    #[test]
+    fn file_write_text_is_local_action_and_requires_confirmation() {
+        let policy = Policy::default();
+        assert!(matches!(
+            policy.capability_tier(&call("file.write_text")),
+            CapabilityTier::LocalActions
+        ));
+        let result = policy.authorize(
+            &call("file.write_text"),
             &PolicyContext {
                 mode: ChatMode::BestEffort,
                 user_confirmed: false,

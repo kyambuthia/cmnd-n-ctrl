@@ -979,4 +979,34 @@ mod tests {
             .iter()
             .any(|a| a.tool_name == "file.read_text" && a.status == "executed"));
     }
+
+    #[test]
+    fn file_write_text_requires_consent_in_best_effort() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        service
+            .project_open(ProjectOpenRequest {
+                path: dir.path().display().to_string(),
+            })
+            .expect("project open");
+
+        let response = service.chat_request(ipc::ChatRequest {
+            session_id: None,
+            messages: vec![ipc::ChatMessage {
+                role: "user".to_string(),
+                content: "tool:write notes/out.txt :: hello".to_string(),
+            }],
+            provider_config: ipc::ProviderConfig {
+                provider_name: "openai-stub".to_string(),
+                model: None,
+            },
+            mode: ipc::ChatMode::BestEffort,
+        });
+
+        assert!(response
+            .proposed_actions
+            .iter()
+            .any(|a| a.tool_name == "file.write_text" && a.status == "consent_required"));
+        assert!(response.consent_token.is_some());
+    }
 }

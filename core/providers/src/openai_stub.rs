@@ -95,6 +95,63 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         }
     }
 
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:json") {
+        if has_tool(tools, "file.read_json") {
+            let path = rest.trim();
+            return Some(ToolCall {
+                name: "file.read_json".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "package.json" } else { path }
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:stat") {
+        if has_tool(tools, "file.stat") {
+            let path = rest.trim();
+            return Some(ToolCall {
+                name: "file.stat".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "." } else { path }
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:grep") {
+        if has_tool(tools, "file.search_text") {
+            let mut parts = rest.trim().splitn(2, " in ");
+            let query = parts.next().unwrap_or("").trim();
+            let path = parts.next().unwrap_or(".").trim();
+            return Some(ToolCall {
+                name: "file.search_text".to_string(),
+                arguments_json: json!({
+                    "query": if query.is_empty() { "TODO" } else { query },
+                    "path": if path.is_empty() { "." } else { path },
+                    "limit": 25
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:write") {
+        if has_tool(tools, "file.write_text") {
+            let (path, content) = rest.split_once("::").map(|(a, b)| (a.trim(), b.trim())).unwrap_or(("notes/generated.txt", rest.trim()));
+            return Some(ToolCall {
+                name: "file.write_text".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "notes/generated.txt" } else { path },
+                    "content": if content.is_empty() { "stub content" } else { content }
+                })
+                .to_string(),
+            });
+        }
+    }
+
     if prompt.to_ascii_lowercase().contains("tool:apps") && has_tool(tools, "desktop.app.list") {
         return Some(ToolCall {
             name: "desktop.app.list".to_string(),

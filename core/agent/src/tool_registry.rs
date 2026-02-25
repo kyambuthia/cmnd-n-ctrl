@@ -45,6 +45,26 @@ impl ToolRegistry {
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1}},\"required\":[\"path\"]}".to_string(),
                 },
                 Tool {
+                    name: "file.read_json".to_string(),
+                    description: "Read and parse a JSON file from the current project (read-only)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}".to_string(),
+                },
+                Tool {
+                    name: "file.search_text".to_string(),
+                    description: "Search project files for a text query (read-only, scoped)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1}},\"required\":[\"query\"]}".to_string(),
+                },
+                Tool {
+                    name: "file.stat".to_string(),
+                    description: "Get metadata for a project-scoped file or directory (read-only)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}".to_string(),
+                },
+                Tool {
+                    name: "file.write_text".to_string(),
+                    description: "Write a text file under the current project root (consent required)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}".to_string(),
+                },
+                Tool {
                     name: "desktop.open_url".to_string(),
                     description: "Open a URL using the platform shell (stubbed)".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}".to_string(),

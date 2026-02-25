@@ -26,3 +26,4 @@ See `docs/threat-model.md` and `docs/permissions-matrix.md` before enabling real
 
 ## Product Roadmap
 - See `docs/ROADMAP.md` for the phased plan to ship a useful Windows/Linux desktop operator agent (browser + file workflows first, desktop app automation next).
+- See `docs/TOOLS-ROADMAP.md` for the tool surface expansion plan (read-only, local actions, browser, desktop automation).
