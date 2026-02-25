@@ -21,6 +21,22 @@ This repo is configured to keep Cargo build artifacts out of the project directo
    - `cargo run -p cli -- chat "please use tool:"`
    - `cargo run -p cli -- chat "please use tool:" --require-confirmation`
 
+## One-Command Local Prototype Runner
+
+From the repo root:
+
+```bash
+bash scripts/dev-prototype.sh
+```
+
+This starts:
+- local JSON-RPC backend on `http://127.0.0.1:7777/jsonrpc`
+- static UI server for `apps/desktop-tauri/src` on `http://127.0.0.1:8080`
+
+Optional overrides:
+- `API_ADDR=127.0.0.1:9000 bash scripts/dev-prototype.sh`
+- `UI_PORT=8090 bash scripts/dev-prototype.sh`
+
 ## Overriding the Target Directory
 
 For a single command:
