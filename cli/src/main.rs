@@ -4,9 +4,9 @@ use std::net::{TcpListener, TcpStream};
 
 use agent::AgentService;
 use ipc::jsonrpc::{Id, Request};
-use ipc::{mcp, ChatMode, ChatRequest, JsonRpcClient, JsonRpcServer, ProviderConfig};
+use ipc::{mcp, ChatApproveRequest, ChatDenyRequest, ChatMode, ChatRequest, ChatResponse, JsonRpcClient, JsonRpcServer, ProviderConfig, Tool};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Debug, Deserialize)]
 struct WireRequest {
@@ -19,13 +19,13 @@ struct WireRequest {
     params: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct WireError {
     code: i64,
     message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct WireResponse {
     jsonrpc: String,
     id: Value,
@@ -40,9 +40,11 @@ fn print_help() {
     println!();
     println!("USAGE:");
     println!("  cli --help");
-    println!("  cli tools [--json] [--raw]");
-    println!("  cli chat <message> [--provider <name>] [--require-confirmation] [--json]");
-    println!("  cli rpc <method> <params-json>");
+    println!("  cli tools [--json] [--raw] [--addr <host:port>]");
+    println!("  cli chat <message> [--provider <name>] [--require-confirmation] [--json] [--addr <host:port>]");
+    println!("  cli approve <consent-token> [--json] [--addr <host:port>]   # requires running serve-http");
+    println!("  cli deny <consent-token> [--json] [--addr <host:port>]      # requires running serve-http");
+    println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
     println!("  cli serve-http [--addr <host:port>]");
 }
@@ -62,7 +64,38 @@ fn main() {
         "tools" => {
             let json_output = args.iter().any(|a| a == "--json");
             let raw_output = args.iter().any(|a| a == "--raw");
-            let tools = client.tools_list();
+            let remote_addr = parse_addr_flag(&args[1..]);
+            let tools = if let Some(addr) = &remote_addr {
+                let wire = match call_http_jsonrpc(addr, "tools.list", json!({})) {
+                    Ok(w) => w,
+                    Err(err) => {
+                        eprintln!("tools error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                if raw_output {
+                    eprintln!(
+                        "raw json-rpc result: {}",
+                        serde_json::to_string(&wire).unwrap_or_else(|_| "{}".to_string())
+                    );
+                }
+                match wire_result::<Vec<Tool>>(wire) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        eprintln!("tools error: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let tools = client.tools_list();
+                if raw_output {
+                    let raw = client.call_raw(Request::new(Id::Number(1), "tools.list", "{}"));
+                    if let Some(result) = raw.result_json {
+                        eprintln!("raw json-rpc result: {result}");
+                    }
+                }
+                tools
+            };
             if json_output {
                 println!(
                     "{}",
@@ -71,13 +104,6 @@ fn main() {
             } else {
                 for tool in tools {
                     println!("{} - {}", tool.name, tool.description);
-                }
-            }
-
-            if raw_output {
-                let raw = client.call_raw(Request::new(Id::Number(1), "tools.list", "{}"));
-                if let Some(result) = raw.result_json {
-                    eprintln!("raw json-rpc result: {result}");
                 }
             }
         }
@@ -90,6 +116,7 @@ fn main() {
             let mut provider_name = "openai-stub".to_string();
             let mut require_confirmation = false;
             let mut json_output = false;
+            let mut remote_addr = None;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -110,12 +137,19 @@ fn main() {
                         i += 1;
                         continue;
                     }
+                    "--addr" => {
+                        if let Some(next) = args.get(i + 1) {
+                            remote_addr = Some(next.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
                     _ => {}
                 }
                 i += 1;
             }
 
-            let response = client.chat_request(ChatRequest {
+            let chat_request = ChatRequest {
                 messages: ipc::sample_messages(&args[1]),
                 provider_config: ProviderConfig {
                     provider_name,
@@ -126,73 +160,69 @@ fn main() {
                 } else {
                     ChatMode::BestEffort
                 },
-            });
+            };
 
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string())
-                );
+            let response = if let Some(addr) = remote_addr.as_deref() {
+                match call_http_jsonrpc(addr, "chat.request", serde_json::to_value(&chat_request).unwrap_or(json!({})))
+                    .and_then(|wire| wire_result::<ChatResponse>(wire).map_err(io::Error::other))
+                {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        eprintln!("chat error: {err}");
+                        std::process::exit(1);
+                    }
+                }
             } else {
-                println!("audit_id: {}", response.audit_id);
-                println!("request_fingerprint: {}", response.request_fingerprint);
-                if let Some(consent_token) = &response.consent_token {
-                    println!("consent_token: {}", consent_token);
-                }
-                println!("actions: {}", response.actions_executed.join(", "));
-                if !response.proposed_actions.is_empty() {
-                    println!("proposed_actions:");
-                    for evt in &response.proposed_actions {
-                        let mut line = format!(
-                            "  - {} [{}] {}",
-                            evt.tool_name, evt.capability_tier, evt.status
-                        );
-                        if let Some(reason) = &evt.reason {
-                            line.push_str(&format!(" reason={}", reason));
-                        }
-                        if let Some(args) = &evt.arguments_preview {
-                            line.push_str(&format!(" args={}", args));
-                        }
-                        println!("{line}");
-                    }
-                }
-                if !response.executed_action_events.is_empty() {
-                    println!("executed_action_events:");
-                    for evt in &response.executed_action_events {
-                        let mut line = format!(
-                            "  - {} [{}] {}",
-                            evt.tool_name, evt.capability_tier, evt.status
-                        );
-                        if let Some(args) = &evt.arguments_preview {
-                            line.push_str(&format!(" args={}", args));
-                        }
-                        if let Some(evidence) = &evt.evidence_summary {
-                            line.push_str(&format!(" evidence={}", evidence));
-                        }
-                        println!("{line}");
-                    }
-                }
-                if !response.action_events.is_empty() {
-                    println!("action_events:");
-                    for evt in &response.action_events {
-                        let mut line = format!(
-                            "  - {} [{}] {}",
-                            evt.tool_name, evt.capability_tier, evt.status
-                        );
-                        if let Some(reason) = &evt.reason {
-                            line.push_str(&format!(" reason={}", reason));
-                        }
-                        if let Some(args) = &evt.arguments_preview {
-                            line.push_str(&format!(" args={}", args));
-                        }
-                        if let Some(evidence) = &evt.evidence_summary {
-                            line.push_str(&format!(" evidence={}", evidence));
-                        }
-                        println!("{line}");
-                    }
-                }
-                println!("response: {}", response.final_text);
+                client.chat_request(chat_request)
+            };
+
+            print_chat_response(&response, json_output);
+        }
+        "approve" => {
+            if args.len() < 2 {
+                eprintln!("error: missing consent token");
+                print_help();
+                std::process::exit(2);
             }
+            let json_output = args.iter().any(|a| a == "--json");
+            let addr = parse_addr_flag(&args[1..]).unwrap_or_else(|| "127.0.0.1:7777".to_string());
+            let params = serde_json::to_value(ChatApproveRequest {
+                consent_token: args[1].clone(),
+            })
+            .unwrap_or(json!({}));
+            let response = match call_http_jsonrpc(&addr, "chat.approve", params)
+                .and_then(|wire| wire_result::<ChatResponse>(wire).map_err(io::Error::other))
+            {
+                Ok(resp) => resp,
+                Err(err) => {
+                    eprintln!("approve error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            print_chat_response(&response, json_output);
+        }
+        "deny" => {
+            if args.len() < 2 {
+                eprintln!("error: missing consent token");
+                print_help();
+                std::process::exit(2);
+            }
+            let json_output = args.iter().any(|a| a == "--json");
+            let addr = parse_addr_flag(&args[1..]).unwrap_or_else(|| "127.0.0.1:7777".to_string());
+            let params = serde_json::to_value(ChatDenyRequest {
+                consent_token: args[1].clone(),
+            })
+            .unwrap_or(json!({}));
+            let response = match call_http_jsonrpc(&addr, "chat.deny", params)
+                .and_then(|wire| wire_result::<ChatResponse>(wire).map_err(io::Error::other))
+            {
+                Ok(resp) => resp,
+                Err(err) => {
+                    eprintln!("deny error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            print_chat_response(&response, json_output);
         }
         "rpc" => {
             if args.len() < 3 {
@@ -200,12 +230,24 @@ fn main() {
                 print_help();
                 std::process::exit(2);
             }
-            let response = client.call_raw(Request::new(
-                Id::Number(1),
-                args[1].clone(),
-                args[2].clone(),
-            ));
-            let wire = to_wire_response(response);
+            let remote_addr = parse_addr_flag(&args[3..]);
+            let wire = if let Some(addr) = remote_addr.as_deref() {
+                let params = serde_json::from_str::<Value>(&args[2]).unwrap_or_else(|_| Value::String(args[2].clone()));
+                match call_http_jsonrpc(addr, &args[1], params) {
+                    Ok(w) => w,
+                    Err(err) => {
+                        eprintln!("rpc error: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let response = client.call_raw(Request::new(
+                    Id::Number(1),
+                    args[1].clone(),
+                    args[2].clone(),
+                ));
+                to_wire_response(response)
+            };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&wire)
@@ -321,6 +363,129 @@ fn to_wire_response(response: ipc::jsonrpc::Response) -> WireResponse {
         result,
         error,
     }
+}
+
+fn parse_addr_flag(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--addr" {
+            return args.get(i + 1).cloned();
+        }
+        i += 1;
+    }
+    None
+}
+
+fn wire_result<T>(wire: WireResponse) -> Result<T, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if let Some(err) = wire.error {
+        return Err(format!("json-rpc {}: {}", err.code, err.message));
+    }
+    let result = wire.result.ok_or_else(|| "missing json-rpc result".to_string())?;
+    serde_json::from_value(result).map_err(|err| format!("invalid result payload: {err}"))
+}
+
+fn print_chat_response(response: &ChatResponse, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(response).unwrap_or_else(|_| "{}".to_string())
+        );
+        return;
+    }
+
+    println!("audit_id: {}", response.audit_id);
+    println!("request_fingerprint: {}", response.request_fingerprint);
+    if let Some(consent_token) = &response.consent_token {
+        println!("consent_token: {}", consent_token);
+    }
+    println!("actions: {}", response.actions_executed.join(", "));
+    if !response.proposed_actions.is_empty() {
+        println!("proposed_actions:");
+        for evt in &response.proposed_actions {
+            let mut line = format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
+            if let Some(reason) = &evt.reason {
+                line.push_str(&format!(" reason={}", reason));
+            }
+            if let Some(args) = &evt.arguments_preview {
+                line.push_str(&format!(" args={}", args));
+            }
+            println!("{line}");
+        }
+    }
+    if !response.executed_action_events.is_empty() {
+        println!("executed_action_events:");
+        for evt in &response.executed_action_events {
+            let mut line = format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
+            if let Some(args) = &evt.arguments_preview {
+                line.push_str(&format!(" args={}", args));
+            }
+            if let Some(evidence) = &evt.evidence_summary {
+                line.push_str(&format!(" evidence={}", evidence));
+            }
+            println!("{line}");
+        }
+    }
+    if !response.action_events.is_empty() {
+        println!("action_events:");
+        for evt in &response.action_events {
+            let mut line = format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
+            if let Some(reason) = &evt.reason {
+                line.push_str(&format!(" reason={}", reason));
+            }
+            if let Some(args) = &evt.arguments_preview {
+                line.push_str(&format!(" args={}", args));
+            }
+            if let Some(evidence) = &evt.evidence_summary {
+                line.push_str(&format!(" evidence={}", evidence));
+            }
+            println!("{line}");
+        }
+    }
+    println!("response: {}", response.final_text);
+}
+
+fn call_http_jsonrpc(addr: &str, method: &str, params: Value) -> io::Result<WireResponse> {
+    let body = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    }))
+    .map_err(|err| io::Error::other(format!("serialize request: {err}")))?;
+
+    let mut stream = TcpStream::connect(addr)?;
+    let request = format!(
+        "POST /jsonrpc HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    let raw = String::from_utf8(bytes)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("utf8 response: {err}")))?;
+
+    let (headers, body) = raw
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed http response"))?;
+
+    let status_line = headers.lines().next().unwrap_or_default();
+    let status_code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    if status_code != 200 {
+        return Err(io::Error::other(format!("http {status_code}: {body}")));
+    }
+
+    serde_json::from_str::<WireResponse>(body)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid json-rpc response: {err}")))
 }
 
 fn serve_http_jsonrpc(addr: &str) -> io::Result<()> {
