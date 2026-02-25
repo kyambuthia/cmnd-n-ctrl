@@ -35,7 +35,11 @@ impl Default for Policy {
 
 impl Policy {
     pub fn capability_tier(&self, tool_call: &ToolCall) -> CapabilityTier {
-        if tool_call.name.starts_with("time.") || tool_call.name == "echo" {
+        if tool_call.name.starts_with("time.")
+            || tool_call.name.starts_with("math.")
+            || tool_call.name.starts_with("text.")
+            || tool_call.name == "echo"
+        {
             CapabilityTier::ReadOnly
         } else if tool_call.name.starts_with("desktop.") || tool_call.name.starts_with("android.") || tool_call.name.starts_with("ios.") {
             CapabilityTier::LocalActions

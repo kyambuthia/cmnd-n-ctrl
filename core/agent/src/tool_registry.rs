@@ -20,6 +20,16 @@ impl ToolRegistry {
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"input\":{\"type\":\"string\"}},\"required\":[\"input\"]}".to_string(),
                 },
                 Tool {
+                    name: "text.uppercase".to_string(),
+                    description: "Uppercase a provided string locally".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}".to_string(),
+                },
+                Tool {
+                    name: "math.add".to_string(),
+                    description: "Add two numbers locally".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}".to_string(),
+                },
+                Tool {
                     name: "desktop.open_url".to_string(),
                     description: "Open a URL using the platform shell (stubbed)".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}".to_string(),

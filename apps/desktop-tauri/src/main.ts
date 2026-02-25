@@ -22,6 +22,7 @@ const consentDetailsEl = document.querySelector('#consentDetails');
 const consentScopeEl = document.querySelector('#consentScope');
 const approveConsentBtn = document.querySelector('#approveConsent');
 const denyConsentBtn = document.querySelector('#denyConsent');
+const presetButtons = Array.from(document.querySelectorAll('.prompt-preset'));
 
 const JSONRPC_URL = 'http://127.0.0.1:7777/jsonrpc';
 let transport = null;
@@ -449,6 +450,14 @@ denyConsentBtn.addEventListener('click', () => {
   }
   clearConsent();
   setStatus('Consent denied');
+});
+
+presetButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    promptEl.value = button.dataset.prompt || '';
+    promptEl.focus();
+    setStatus('Preset loaded');
+  });
 });
 
 debugToggleBtn.addEventListener('click', () => {

@@ -1,4 +1,5 @@
 use ipc::{ChatMessage, ProviderConfig, Tool, ToolCall, ToolResult};
+use serde_json::json;
 
 use crate::provider_trait::{Provider, ProviderReply};
 
@@ -18,12 +19,8 @@ impl Provider for OpenAiStubProvider {
     ) -> ProviderReply {
         if tool_results.is_empty() {
             if let Some(last) = messages.last() {
-                if last.content.contains("tool:") {
-                    let first_tool = tools.first().map(|t| t.name.clone()).unwrap_or_else(|| "echo".to_string());
-                    return ProviderReply::ToolCalls(vec![ToolCall {
-                        name: first_tool,
-                        arguments_json: "{\"input\":\"stub\"}".to_string(),
-                    }]);
+                if let Some(call) = select_stub_tool_call(&last.content, tools) {
+                    return ProviderReply::ToolCalls(vec![call]);
                 }
             }
         }
@@ -38,4 +35,83 @@ impl Provider for OpenAiStubProvider {
             suffix
         ))
     }
+}
+
+fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
+    if !prompt.contains("tool:") {
+        return None;
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:open") {
+        if has_tool(tools, "desktop.open_url") {
+            let url = rest.trim();
+            return Some(ToolCall {
+                name: "desktop.open_url".to_string(),
+                arguments_json: json!({
+                    "url": if url.is_empty() { "https://example.com" } else { url }
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:add") {
+        if has_tool(tools, "math.add") {
+            let mut nums = rest
+                .split_whitespace()
+                .filter_map(|s| s.parse::<f64>().ok());
+            let a = nums.next().unwrap_or(2.0);
+            let b = nums.next().unwrap_or(3.0);
+            return Some(ToolCall {
+                name: "math.add".to_string(),
+                arguments_json: json!({ "a": a, "b": b }).to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:upper") {
+        if has_tool(tools, "text.uppercase") {
+            let text = rest.trim();
+            return Some(ToolCall {
+                name: "text.uppercase".to_string(),
+                arguments_json: json!({ "text": if text.is_empty() { "stub" } else { text } }).to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:echo") {
+        if has_tool(tools, "echo") {
+            let input = rest.trim();
+            return Some(ToolCall {
+                name: "echo".to_string(),
+                arguments_json: json!({ "input": if input.is_empty() { "stub" } else { input } }).to_string(),
+            });
+        }
+    }
+
+    if prompt.to_ascii_lowercase().contains("tool:time") && has_tool(tools, "time.now") {
+        return Some(ToolCall {
+            name: "time.now".to_string(),
+            arguments_json: "{}".to_string(),
+        });
+    }
+
+    let first_tool = tools
+        .first()
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| "echo".to_string());
+    Some(ToolCall {
+        name: first_tool,
+        arguments_json: json!({ "input": "stub" }).to_string(),
+    })
+}
+
+fn has_tool(tools: &[Tool], name: &str) -> bool {
+    tools.iter().any(|t| t.name == name)
+}
+
+fn slice_after_case_insensitive<'a>(haystack: &'a str, needle: &str) -> Option<&'a str> {
+    let lower = haystack.to_ascii_lowercase();
+    let idx = lower.find(&needle.to_ascii_lowercase())?;
+    Some(&haystack[idx + needle.len()..])
 }

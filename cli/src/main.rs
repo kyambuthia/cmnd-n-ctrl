@@ -40,8 +40,9 @@ fn print_help() {
     println!();
     println!("USAGE:");
     println!("  cli --help");
-    println!("  cli tools");
-    println!("  cli chat <message> [--provider <name>] [--require-confirmation]");
+    println!("  cli tools [--json] [--raw]");
+    println!("  cli chat <message> [--provider <name>] [--require-confirmation] [--json]");
+    println!("  cli rpc <method> <params-json>");
     println!("  cli serve-stdio");
     println!("  cli serve-http [--addr <host:port>]");
 }
@@ -59,14 +60,25 @@ fn main() {
 
     match args[0].as_str() {
         "tools" => {
+            let json_output = args.iter().any(|a| a == "--json");
+            let raw_output = args.iter().any(|a| a == "--raw");
             let tools = client.tools_list();
-            for tool in tools {
-                println!("{} - {}", tool.name, tool.description);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&tools).unwrap_or_else(|_| "[]".to_string())
+                );
+            } else {
+                for tool in tools {
+                    println!("{} - {}", tool.name, tool.description);
+                }
             }
 
-            let raw = client.call_raw(Request::new(Id::Number(1), "tools.list", "{}"));
-            if let Some(result) = raw.result_json {
-                eprintln!("raw json-rpc result: {result}");
+            if raw_output {
+                let raw = client.call_raw(Request::new(Id::Number(1), "tools.list", "{}"));
+                if let Some(result) = raw.result_json {
+                    eprintln!("raw json-rpc result: {result}");
+                }
             }
         }
         "chat" => {
@@ -77,6 +89,7 @@ fn main() {
             }
             let mut provider_name = "openai-stub".to_string();
             let mut require_confirmation = false;
+            let mut json_output = false;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -89,6 +102,11 @@ fn main() {
                     }
                     "--require-confirmation" => {
                         require_confirmation = true;
+                        i += 1;
+                        continue;
+                    }
+                    "--json" => {
+                        json_output = true;
                         i += 1;
                         continue;
                     }
@@ -110,9 +128,34 @@ fn main() {
                 },
             });
 
-            println!("audit_id: {}", response.audit_id);
-            println!("actions: {}", response.actions_executed.join(", "));
-            println!("response: {}", response.final_text);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string())
+                );
+            } else {
+                println!("audit_id: {}", response.audit_id);
+                println!("actions: {}", response.actions_executed.join(", "));
+                println!("response: {}", response.final_text);
+            }
+        }
+        "rpc" => {
+            if args.len() < 3 {
+                eprintln!("error: usage: cli rpc <method> <params-json>");
+                print_help();
+                std::process::exit(2);
+            }
+            let response = client.call_raw(Request::new(
+                Id::Number(1),
+                args[1].clone(),
+                args[2].clone(),
+            ));
+            let wire = to_wire_response(response);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&wire)
+                    .unwrap_or_else(|_| "{\"error\":\"serialize\"}".to_string())
+            );
         }
         "serve-stdio" => {
             if let Err(err) = serve_stdio_jsonrpc() {

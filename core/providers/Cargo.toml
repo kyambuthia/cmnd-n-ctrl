@@ -6,3 +6,4 @@ license = "MIT"
 
 [dependencies]
 ipc = { path = "../ipc" }
+serde_json = "1"

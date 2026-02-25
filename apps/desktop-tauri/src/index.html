@@ -397,6 +397,12 @@
             <label class="section-title" for="prompt">Request</label>
             <textarea id="prompt" placeholder="Ask something or type 'tool:' to trigger stub tool usage"></textarea>
             <div class="row">
+              <button class="ghost prompt-preset" type="button" data-prompt="tool:time">Time</button>
+              <button class="ghost prompt-preset" type="button" data-prompt="tool:add 2 3">Add 2 + 3</button>
+              <button class="ghost prompt-preset" type="button" data-prompt="tool:upper hello world">Uppercase</button>
+              <button class="ghost prompt-preset" type="button" data-prompt="tool:open https://example.com">Open URL (consent)</button>
+            </div>
+            <div class="row">
               <label class="muted"><input id="requireConfirmation" type="checkbox" checked /> require confirmation</label>
               <button id="send" type="button">Send</button>
               <button id="listTools" class="secondary" type="button">List Tools</button>
