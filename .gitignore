@@ -1,4 +1,18 @@
-target/
+# Rust build outputs
+/target/
 **/target/
+
+# Keep root Cargo.lock tracked (binary workspace), but ignore nested core workspace lockfile
 /core/Cargo.lock
+
+# Tauri / frontend dependencies and build outputs
+**/node_modules/
+apps/desktop-tauri/dist/
+
+# OS / editor noise
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
