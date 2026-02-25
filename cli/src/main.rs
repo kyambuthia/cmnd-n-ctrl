@@ -41,6 +41,7 @@ fn print_help() {
     println!("cli - Rust CLI client for local assistant IPC");
     println!();
     println!("USAGE:");
+    println!("  cli        # launches interactive terminal UI (ratatui)");
     println!("  cli --help");
     println!("  cli tools [--json] [--raw] [--addr <host:port>]");
     println!("  cli chat <message> [--provider <name>] [--session <id>] [--require-confirmation] [--json] [--addr <host:port>]");
@@ -61,7 +62,7 @@ fn print_help() {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
         return;
     }
@@ -69,6 +70,14 @@ fn main() {
     let service = AgentService::new_for_platform("cli");
     let mut server = JsonRpcServer::new(service);
     let mut client = JsonRpcClient::new(&mut server);
+
+    if args.is_empty() {
+        if let Err(err) = tui::run(&mut client) {
+            eprintln!("tui error: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     match args[0].as_str() {
         "tools" => {
