@@ -2,16 +2,21 @@ const promptEl = document.querySelector('#prompt');
 const responseEl = document.querySelector('#response');
 const auditEl = document.querySelector('#audit');
 const actionsEl = document.querySelector('#actions');
+const actionChipsEl = document.querySelector('#actionChips');
 const rawEl = document.querySelector('#raw');
 const statusEl = document.querySelector('#status');
+const transportBadgeEl = document.querySelector('#transportBadge');
 const requireConfirmationEl = document.querySelector('#requireConfirmation');
 const sendBtn = document.querySelector('#send');
 const listToolsBtn = document.querySelector('#listTools');
+const clearViewBtn = document.querySelector('#clearView');
+const presetButtons = Array.from(document.querySelectorAll('.prompt-preset'));
 
 const JSONRPC_URL = 'http://127.0.0.1:7777/jsonrpc';
+let transport = null;
 
 function setStatus(message) {
-  statusEl.textContent = message;
+  statusEl.innerHTML = `<span class="dot"></span>${escapeHtml(message)}`;
 }
 
 function setRaw(payload) {
@@ -20,13 +25,13 @@ function setRaw(payload) {
 
 function resetPanelsForRequest() {
   auditEl.textContent = 'audit_id: n/a';
-  actionsEl.textContent = '(none)';
+  setActions([]);
 }
 
 function renderChatResult(result) {
   responseEl.textContent = result.final_text || '';
   auditEl.textContent = `audit_id: ${result.audit_id || 'n/a'}`;
-  actionsEl.textContent = (result.actions_executed || []).join('\n') || '(none)';
+  setActions(result.actions_executed || []);
 }
 
 function renderToolsResult(result) {
@@ -37,8 +42,7 @@ function renderToolsResult(result) {
 
   responseEl.textContent = `Available tools: ${result.length}`;
   auditEl.textContent = 'audit_id: n/a (tools.list)';
-  actionsEl.textContent =
-    result.map((t) => `${t.name} - ${t.description}`).join('\n') || '(none)';
+  setActions(result.map((t) => `${t.name} - ${t.description}`));
 }
 
 function renderJsonRpcResponse(payload) {
@@ -71,17 +75,7 @@ async function callLocalJsonRpc(method, params) {
 
   setRaw(payload);
 
-  const resp = await fetch(JSONRPC_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-  }
-
-  return await resp.json();
+  return await transport.callJsonRpc(payload);
 }
 
 async function runChatRequest() {
@@ -109,15 +103,17 @@ async function runToolsList() {
 async function withUiBusy(action) {
   sendBtn.disabled = true;
   listToolsBtn.disabled = true;
+  clearViewBtn.disabled = true;
   try {
     await action();
   } catch (error) {
     responseEl.textContent =
-      'Local JSON-RPC endpoint not running. Start `cargo run -p cli -- serve-http` and retry.';
+      'Backend unavailable. Start `bash scripts/dev-prototype.sh` (dev) or wire Tauri backend transport.';
     setStatus(error instanceof Error ? `Connection failed: ${error.message}` : 'Connection failed');
   } finally {
     sendBtn.disabled = false;
     listToolsBtn.disabled = false;
+    clearViewBtn.disabled = false;
   }
 }
 
@@ -128,3 +124,88 @@ sendBtn.addEventListener('click', async () => {
 listToolsBtn.addEventListener('click', async () => {
   await withUiBusy(runToolsList);
 });
+
+clearViewBtn.addEventListener('click', () => {
+  responseEl.textContent = 'No response yet.';
+  auditEl.textContent = 'audit_id: n/a';
+  setActions([]);
+  setRaw('No requests yet.');
+  setStatus('Cleared');
+});
+
+presetButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    promptEl.value = button.dataset.prompt || '';
+    promptEl.focus();
+    setStatus('Preset loaded');
+  });
+});
+
+promptEl.addEventListener('keydown', async (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    await withUiBusy(runChatRequest);
+  }
+});
+
+function setActions(items) {
+  const lines = Array.isArray(items) && items.length > 0 ? items : [];
+  actionsEl.textContent = lines.join('\n') || '(none)';
+  actionChipsEl.innerHTML = '';
+  if (lines.length === 0) {
+    actionChipsEl.innerHTML = '<span class="chip">(none)</span>';
+    return;
+  }
+  for (const line of lines) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = line.length > 64 ? `${line.slice(0, 61)}...` : line;
+    actionChipsEl.appendChild(chip);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function detectTransport() {
+  if (isTauriRuntime()) {
+    transportBadgeEl.textContent = 'transport: tauri (stub)';
+    return {
+      name: 'tauri-stub',
+      async callJsonRpc(payload) {
+        // Placeholder for future Tauri-native bridge.
+        // Intended shape: invoke('jsonrpc_request', { payload })
+        throw new Error(`Tauri transport not wired yet for method ${payload.method}`);
+      },
+    };
+  }
+
+  transportBadgeEl.textContent = 'transport: http-dev';
+  return {
+    name: 'http-dev',
+    async callJsonRpc(payload) {
+      const resp = await fetch(JSONRPC_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      }
+      return await resp.json();
+    },
+  };
+}
+
+function isTauriRuntime() {
+  return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__ || window.__TAURI_IPC__);
+}
+
+transport = detectTransport();
+setStatus(`Ready (${transport.name})`);
