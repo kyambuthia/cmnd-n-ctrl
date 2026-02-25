@@ -1,5 +1,5 @@
 use actions::traits::ActionBackend;
-use ipc::{ChatMessage, ChatMode, ChatResponse, ProviderConfig, ToolResult};
+use ipc::{ActionEvent, ChatMessage, ChatMode, ChatResponse, ProviderConfig, ToolResult};
 use providers::provider_trait::{Provider, ProviderReply};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -95,6 +95,7 @@ where
             .unwrap_or(0);
         let tools = self.tool_registry.list();
         let mut executed_actions = Vec::new();
+        let mut action_events: Vec<ActionEvent> = Vec::new();
         let mut tool_results: Vec<ToolResult> = Vec::new();
         let mut requested_tool_calls = Vec::new();
         let mut policy_decisions = Vec::new();
@@ -108,6 +109,13 @@ where
                     requested_tool_calls.push(call.name.clone());
                     if !self.tool_registry.has_tool(&call.name) {
                         executed_actions.push(format!("denied:{}:unknown_tool", call.name));
+                        action_events.push(ActionEvent {
+                            tool_name: call.name.clone(),
+                            capability_tier: capability_tier_label(&CapabilityTier::SystemActions),
+                            status: "denied".to_string(),
+                            reason: Some("unknown_tool".to_string()),
+                            evidence_summary: None,
+                        });
                         policy_decisions.push(PolicyDecisionRecord {
                             tool_name: call.name,
                             capability_tier: CapabilityTier::SystemActions,
@@ -127,7 +135,15 @@ where
                     match auth {
                         Authorization::Allow => {
                             let result = self.action_backend.execute_tool(&call);
+                            let evidence_summary = result.evidence.summary.clone();
                             executed_actions.push(call.name.clone());
+                            action_events.push(ActionEvent {
+                                tool_name: call.name.clone(),
+                                capability_tier: capability_tier_label(&tier),
+                                status: "executed".to_string(),
+                                reason: None,
+                                evidence_summary: Some(evidence_summary),
+                            });
                             policy_decisions.push(PolicyDecisionRecord {
                                 tool_name: call.name.clone(),
                                 capability_tier: tier,
@@ -138,6 +154,13 @@ where
                         }
                         Authorization::RequireConfirmation { reason } => {
                             pending_confirmation = true;
+                            action_events.push(ActionEvent {
+                                tool_name: call.name.clone(),
+                                capability_tier: capability_tier_label(&tier),
+                                status: "consent_required".to_string(),
+                                reason: Some(reason.clone()),
+                                evidence_summary: None,
+                            });
                             policy_decisions.push(PolicyDecisionRecord {
                                 tool_name: call.name.clone(),
                                 capability_tier: tier,
@@ -147,6 +170,13 @@ where
                             executed_actions.push(format!("confirm_required:{}:{}", call.name, reason));
                         }
                         Authorization::Deny { reason } => {
+                            action_events.push(ActionEvent {
+                                tool_name: call.name.clone(),
+                                capability_tier: capability_tier_label(&tier),
+                                status: "denied".to_string(),
+                                reason: Some(reason.clone()),
+                                evidence_summary: None,
+                            });
                             policy_decisions.push(PolicyDecisionRecord {
                                 tool_name: call.name.clone(),
                                 capability_tier: tier,
@@ -185,6 +215,7 @@ where
             final_text,
             audit_id,
             actions_executed: executed_actions,
+            action_events,
         }
     }
 
@@ -196,4 +227,13 @@ where
     pub fn audit_events(&self) -> &[AuditEvent] {
         self.audit_log.events()
     }
+}
+
+fn capability_tier_label(tier: &CapabilityTier) -> String {
+    match tier {
+        CapabilityTier::ReadOnly => "ReadOnly",
+        CapabilityTier::LocalActions => "LocalActions",
+        CapabilityTier::SystemActions => "SystemActions",
+    }
+    .to_string()
 }

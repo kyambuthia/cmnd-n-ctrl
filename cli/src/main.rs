@@ -136,6 +136,22 @@ fn main() {
             } else {
                 println!("audit_id: {}", response.audit_id);
                 println!("actions: {}", response.actions_executed.join(", "));
+                if !response.action_events.is_empty() {
+                    println!("action_events:");
+                    for evt in &response.action_events {
+                        let mut line = format!(
+                            "  - {} [{}] {}",
+                            evt.tool_name, evt.capability_tier, evt.status
+                        );
+                        if let Some(reason) = &evt.reason {
+                            line.push_str(&format!(" reason={}", reason));
+                        }
+                        if let Some(evidence) = &evt.evidence_summary {
+                            line.push_str(&format!(" evidence={}", evidence));
+                        }
+                        println!("{line}");
+                    }
+                }
                 println!("response: {}", response.final_text);
             }
         }

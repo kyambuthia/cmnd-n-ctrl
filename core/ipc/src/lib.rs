@@ -58,10 +58,20 @@ pub struct ChatRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionEvent {
+    pub tool_name: String,
+    pub capability_tier: String,
+    pub status: String,
+    pub reason: Option<String>,
+    pub evidence_summary: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
     pub actions_executed: Vec<String>,
+    pub action_events: Vec<ActionEvent>,
 }
 
 pub trait ChatService {

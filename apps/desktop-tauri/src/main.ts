@@ -112,6 +112,58 @@ function riskChipClass(tier) {
   return `risk-${String(tier).toLowerCase()}`;
 }
 
+function normalizeTier(tier) {
+  return typeof tier === 'string' && tier ? tier : 'SystemActions';
+}
+
+function legacyEntryToActionEvent(entry) {
+  const text = String(entry || '');
+  if (text.startsWith('confirm_required:')) {
+    const [, toolName, ...reasonParts] = text.split(':');
+    const tool = toolName || '(unknown)';
+    return {
+      tool_name: tool,
+      capability_tier: inferRiskTier(tool),
+      status: 'consent_required',
+      reason: reasonParts.join(':') || 'Approval required',
+      evidence_summary: null,
+    };
+  }
+  if (text.startsWith('denied:')) {
+    const [, toolName, ...reasonParts] = text.split(':');
+    const tool = toolName || '(unknown)';
+    return {
+      tool_name: tool,
+      capability_tier: inferRiskTier(tool),
+      status: 'denied',
+      reason: reasonParts.join(':') || 'Denied',
+      evidence_summary: null,
+    };
+  }
+  return {
+    tool_name: text,
+    capability_tier: inferRiskTier(text),
+    status: 'executed',
+    reason: null,
+    evidence_summary: null,
+  };
+}
+
+function normalizeActionEvents(result) {
+  const events = Array.isArray(result && result.action_events) ? result.action_events : [];
+  if (events.length) {
+    return events.map((evt) => ({
+      tool_name: evt.tool_name || '(unknown)',
+      capability_tier: normalizeTier(evt.capability_tier),
+      status: evt.status || 'unknown',
+      reason: evt.reason || null,
+      evidence_summary: evt.evidence_summary || null,
+    }));
+  }
+  const legacy = Array.isArray(result && result.actions_executed) ? result.actions_executed : [];
+  return legacy.map(legacyEntryToActionEvent);
+}
+
 function clearConsent() {
   pendingConsent = null;
   consentApprovalArmed = false;
@@ -172,25 +224,25 @@ function resetPanelsForRequest() {
 
 function parsePendingConsent(actions) {
   return (Array.isArray(actions) ? actions : [])
-    .filter((a) => typeof a === 'string' && a.startsWith('confirm_required:'))
-    .map((entry) => {
-      const [, toolName, ...reasonParts] = entry.split(':');
-      const name = toolName || '(unknown)';
-      return {
-        raw: entry,
-        toolName: name,
-        reason: reasonParts.join(':') || 'Approval required',
-        riskTier: inferRiskTier(name),
-      };
-    });
+    .filter((evt) => evt.status === 'consent_required')
+    .map((evt) => ({
+      raw: evt,
+      toolName: evt.tool_name || '(unknown)',
+      reason: evt.reason || 'Approval required',
+      riskTier: normalizeTier(evt.capability_tier),
+    }));
 }
 
 function renderChatResult(result) {
-  const actions = result.actions_executed || [];
+  const actionEvents = normalizeActionEvents(result);
   auditEl.textContent = `audit_id: ${result.audit_id || 'n/a'}`;
-  setActions(actions);
+  setActions(
+    Array.isArray(result.actions_executed) && result.actions_executed.length
+      ? result.actions_executed
+      : actionEvents.map((evt) => `${evt.status}:${evt.tool_name}`),
+  );
 
-  const pending = parsePendingConsent(actions);
+  const pending = parsePendingConsent(actionEvents);
   if (pending.length > 0) {
     showConsent(pending);
     setCurrentAction(
@@ -203,10 +255,28 @@ function renderChatResult(result) {
     return;
   }
 
-  const executed = actions.filter((a) => !String(a).startsWith('confirm_required:'));
+  const denied = actionEvents.filter((evt) => evt.status === 'denied');
+  const executed = actionEvents.filter((evt) => evt.status === 'executed');
   if (executed.length > 0) {
-    setCurrentAction('ok', 'Action Executed', executed.join('\n'), executed.map(actionToRiskTier));
-    pushHistory('ok', 'Action Executed', executed.join('\n'));
+    setCurrentAction(
+      'ok',
+      'Action Executed',
+      executed
+        .map((evt) =>
+          evt.evidence_summary ? `${evt.tool_name}\n${evt.evidence_summary}` : evt.tool_name,
+        )
+        .join('\n\n'),
+      executed.map((evt) => normalizeTier(evt.capability_tier)),
+    );
+    pushHistory('ok', 'Action Executed', executed.map((evt) => evt.tool_name).join(', '));
+  } else if (denied.length > 0) {
+    setCurrentAction(
+      'warn',
+      'Action Denied',
+      denied.map((evt) => `${evt.tool_name}: ${evt.reason || 'Denied'}`).join('\n'),
+      denied.map((evt) => normalizeTier(evt.capability_tier)),
+    );
+    pushHistory('warn', 'Action Denied', denied.map((evt) => evt.tool_name).join(', '));
   } else {
     setCurrentAction('event', 'No Action Taken', 'The request completed without executing a tool action.', ['idle']);
     pushHistory('event', 'No Action Taken', 'Request completed without executing a tool action.');
@@ -348,11 +418,6 @@ async function withUiBusy(action) {
     approveConsentBtn.disabled = false;
     denyConsentBtn.disabled = false;
   }
-}
-
-function actionToRiskTier(actionEntry) {
-  const toolName = String(actionEntry).split(':')[0];
-  return inferRiskTier(toolName);
 }
 
 function requiresExtraConsentClick(requests) {
