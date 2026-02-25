@@ -1,6 +1,6 @@
-# Cross-Platform AI Assistant Monorepo (Scaffold)
+# Cross-Platform AI Assistant Monorepo
 
-This repository scaffolds a security-first, cross-platform AI assistant architecture with:
+This repository contains a security-first, cross-platform AI assistant architecture with:
 - Rust core for orchestration, policy, tools, and IPC
 - Rust CLI client
 - Tauri v2 desktop app shell
@@ -23,3 +23,6 @@ Build targets prepared in this scaffold are Windows and Linux only. Mobile folde
 4. Desktop shell scaffold: `cd apps/desktop-tauri && npm install && npm run tauri dev` (after installing Tauri v2 prerequisites)
 
 See `docs/threat-model.md` and `docs/permissions-matrix.md` before enabling real platform actions or model providers.
+
+## Product Roadmap
+- See `docs/ROADMAP.md` for the phased plan to ship a useful Windows/Linux desktop operator agent (browser + file workflows first, desktop app automation next).
