@@ -8,8 +8,9 @@ use ipc::{
     ChatRequest, ChatResponse, ChatService, ConsentActionRequest, ConsentListRequest, ConsentRequest,
     McpServerAddRequest, McpServerCallRequest, McpServerCallResponse, McpServerMutationResponse,
     McpServerRecord, McpServerRemoveRequest, McpServerProbeResponse, McpServerStateRequest,
-    McpServerToolsResponse, PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse,
-    ProjectStatusRequest, ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
+    McpServerToolCallRequest, McpServerToolCallResponse, McpServerToolsResponse,
+    PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse, ProjectStatusRequest,
+    ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
     ProviderConfigSetRequest, ProviderConfigSetResponse, ProviderInfo, ProvidersSetRequest, Session,
     SessionCreateRequest, SessionDeleteRequest, SessionDeleteResponse, SessionGetRequest,
     SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, SystemHealthResponse,
@@ -802,6 +803,35 @@ impl ChatService for AgentService {
             Err(err) => Ok(McpServerCallResponse {
                 server_id: params.server_id,
                 method: params.method,
+                ok: false,
+                result_json: None,
+                error: Some(err),
+            }),
+        }
+    }
+
+    fn mcp_servers_tool_call(
+        &self,
+        params: McpServerToolCallRequest,
+    ) -> Result<McpServerToolCallResponse, String> {
+        let args_value = serde_json::from_str::<serde_json::Value>(&params.arguments_json)
+            .unwrap_or_else(|_| serde_json::json!({}));
+        let params_json = serde_json::json!({
+            "name": params.tool_name,
+            "arguments": args_value
+        })
+        .to_string();
+        match self.mcp_request(&params.server_id, "tools/call", &params_json) {
+            Ok(result_json) => Ok(McpServerToolCallResponse {
+                server_id: params.server_id,
+                tool_name: params.tool_name,
+                ok: true,
+                result_json: Some(result_json),
+                error: None,
+            }),
+            Err(err) => Ok(McpServerToolCallResponse {
+                server_id: params.server_id,
+                tool_name: params.tool_name,
                 ok: false,
                 result_json: None,
                 error: Some(err),
@@ -1816,6 +1846,50 @@ sleep 1"#;
             .as_deref()
             .unwrap_or_default()
             .contains("\"pong\":true"));
+
+        let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_servers_tool_call_wraps_tools_call_method() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let script = r#"p1='{"jsonrpc":"2.0","id":1,"result":{"server":"stub"}}'
+p2='{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"opened"}]}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#p1}" "$p1"
+printf 'Content-Length: %s\r\n\r\n%s' "${#p2}" "$p2"
+sleep 1"#;
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "toolcaller".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+
+        let response = service
+            .mcp_servers_tool_call(McpServerToolCallRequest {
+                server_id: server.id.clone(),
+                tool_name: "browser.open".to_string(),
+                arguments_json: r#"{"url":"https://example.com"}"#.to_string(),
+            })
+            .expect("tool call");
+        assert!(response.ok);
+        assert_eq!(response.tool_name, "browser.open");
+        assert!(response
+            .result_json
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"opened\""));
 
         let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
     }
