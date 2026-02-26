@@ -339,6 +339,28 @@ impl AgentService {
         }
     }
 
+    fn append_assistant_message_to_session_if_requested(
+        &mut self,
+        session_id: Option<&str>,
+        content: &str,
+    ) {
+        let Some(session_id) = session_id else {
+            return;
+        };
+        let mut sessions = match self.storage.list_sessions() {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
+            s.messages.push(ipc::ChatMessage {
+                role: "assistant".to_string(),
+                content: content.to_string(),
+            });
+            s.updated_at_unix_seconds = Self::now_secs();
+            let _ = self.storage.write_sessions(&sessions);
+        }
+    }
+
     fn provider_state(&self) -> Result<ProviderState, String> {
         self.storage.read_provider_state().map_err(Self::io_err)
     }
@@ -367,6 +389,10 @@ impl ChatService for AgentService {
         response.audit_id = self.next_synthetic_audit_id();
         response.session_id = params.session_id.clone();
         let _ = self.attach_or_create_consent(&params, &mut response);
+        self.append_assistant_message_to_session_if_requested(
+            response.session_id.as_deref(),
+            &response.final_text,
+        );
         self.persist_audit_from_response(&response, &params.provider_config.provider_name);
         response
     }
@@ -382,16 +408,25 @@ impl ChatService for AgentService {
         response.session_id = pending.record.session_id.clone();
         response.consent_token = None;
         response.consent_request = None;
+        self.append_assistant_message_to_session_if_requested(
+            response.session_id.as_deref(),
+            &response.final_text,
+        );
         self.persist_audit_from_response(&response, &req.provider_config.provider_name);
         Ok(response)
     }
 
     fn chat_deny(&mut self, params: ChatDenyRequest) -> Result<ChatResponse, String> {
         let pending = self.mark_or_find_pending_consent(&params.consent_token, "denied")?;
-        Ok(self.response_for_denial(
+        let response = self.response_for_denial(
             &pending,
             &pending.chat_request.provider_config.provider_name,
-        ))
+        );
+        self.append_assistant_message_to_session_if_requested(
+            response.session_id.as_deref(),
+            &response.final_text,
+        );
+        Ok(response)
     }
 
     fn sessions_create(&mut self, params: SessionCreateRequest) -> Result<Session, String> {
@@ -1008,5 +1043,40 @@ mod tests {
             .iter()
             .any(|a| a.tool_name == "file.write_text" && a.status == "consent_required"));
         assert!(response.consent_token.is_some());
+    }
+
+    #[test]
+    fn session_history_persists_assistant_response() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let session = service
+            .sessions_create(SessionCreateRequest {
+                title: Some("Test Session".to_string()),
+            })
+            .expect("create session");
+
+        let response = service.chat_request(ipc::ChatRequest {
+            session_id: Some(session.id.clone()),
+            messages: vec![ipc::ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            }],
+            provider_config: ipc::ProviderConfig {
+                provider_name: "openai-stub".to_string(),
+                model: None,
+            },
+            mode: ipc::ChatMode::BestEffort,
+        });
+
+        let stored = service
+            .sessions_get(SessionGetRequest {
+                session_id: session.id,
+            })
+            .expect("get session");
+        assert_eq!(stored.messages.len(), 2);
+        assert_eq!(stored.messages[0].role, "user");
+        assert_eq!(stored.messages[0].content, "hello");
+        assert_eq!(stored.messages[1].role, "assistant");
+        assert_eq!(stored.messages[1].content, response.final_text);
     }
 }

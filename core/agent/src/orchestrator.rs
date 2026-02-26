@@ -60,6 +60,8 @@ where
     P: Provider,
     A: ActionBackend,
 {
+    const MAX_TOOL_ROUNDS: usize = 4;
+
     pub fn new(policy: Policy, tool_registry: ToolRegistry, provider: P, action_backend: A) -> Self {
         Self {
             policy,
@@ -114,115 +116,125 @@ where
         let mut requested_tool_calls = Vec::new();
         let mut policy_decisions = Vec::new();
 
-        let first_reply = self.provider.chat(&messages, &tools, &tool_results, &provider_config);
-        let final_text = match first_reply {
-            ProviderReply::FinalText(text) => text,
-            ProviderReply::ToolCalls(calls) => {
-                let mut pending_confirmation = false;
-                for call in calls {
-                    requested_tool_calls.push(call.name.clone());
-                    if !self.tool_registry.has_tool(&call.name) {
-                        executed_actions.push(format!("denied:{}:unknown_tool", call.name));
-                        proposed_actions.push(ActionEvent {
-                            tool_name: call.name.clone(),
-                            capability_tier: capability_tier_label(&CapabilityTier::SystemActions),
-                            status: "denied".to_string(),
-                            reason: Some("unknown_tool".to_string()),
-                            arguments_preview: Some(arguments_preview(&call.arguments_json)),
-                            evidence_summary: None,
-                        });
-                        policy_decisions.push(PolicyDecisionRecord {
-                            tool_name: call.name,
-                            capability_tier: CapabilityTier::SystemActions,
-                            decision: "deny".to_string(),
-                            reason: Some("unknown_tool".to_string()),
-                        });
-                        continue;
+        let mut provider_reply = self.provider.chat(&messages, &tools, &tool_results, &provider_config);
+        let mut tool_rounds = 0usize;
+        let final_text = loop {
+            match provider_reply {
+                ProviderReply::FinalText(text) => break text,
+                ProviderReply::ToolCalls(calls) => {
+                    tool_rounds += 1;
+                    if tool_rounds > Self::MAX_TOOL_ROUNDS {
+                        break format!(
+                            "Provider requested more than {} tool rounds; stopping for safety.",
+                            Self::MAX_TOOL_ROUNDS
+                        );
                     }
-                    let tier = self.policy.capability_tier(&call);
-                    let auth = self.policy.authorize(
-                        &call,
-                        &PolicyContext {
-                            mode: mode.clone(),
-                            user_confirmed,
-                        },
-                    );
-                    match auth {
-                        Authorization::Allow => {
-                            proposed_actions.push(ActionEvent {
-                                tool_name: call.name.clone(),
-                                capability_tier: capability_tier_label(&tier),
-                                status: "approved".to_string(),
-                                reason: None,
-                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
-                                evidence_summary: None,
-                            });
-                            let result = self.action_backend.execute_tool(&call);
-                            let evidence_summary = result.evidence.summary.clone();
-                            executed_actions.push(call.name.clone());
-                            executed_action_events.push(ActionEvent {
-                                tool_name: call.name.clone(),
-                                capability_tier: capability_tier_label(&tier),
-                                status: "executed".to_string(),
-                                reason: None,
-                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
-                                evidence_summary: Some(evidence_summary),
-                            });
-                            policy_decisions.push(PolicyDecisionRecord {
-                                tool_name: call.name.clone(),
-                                capability_tier: tier,
-                                decision: "allow".to_string(),
-                                reason: None,
-                            });
-                            tool_results.push(result);
-                        }
-                        Authorization::RequireConfirmation { reason } => {
-                            pending_confirmation = true;
-                            proposed_actions.push(ActionEvent {
-                                tool_name: call.name.clone(),
-                                capability_tier: capability_tier_label(&tier),
-                                status: "consent_required".to_string(),
-                                reason: Some(reason.clone()),
-                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
-                                evidence_summary: None,
-                            });
-                            policy_decisions.push(PolicyDecisionRecord {
-                                tool_name: call.name.clone(),
-                                capability_tier: tier,
-                                decision: "require_confirmation".to_string(),
-                                reason: Some(reason.clone()),
-                            });
-                            executed_actions.push(format!("confirm_required:{}:{}", call.name, reason));
-                        }
-                        Authorization::Deny { reason } => {
-                            proposed_actions.push(ActionEvent {
-                                tool_name: call.name.clone(),
-                                capability_tier: capability_tier_label(&tier),
-                                status: "denied".to_string(),
-                                reason: Some(reason.clone()),
-                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
-                                evidence_summary: None,
-                            });
-                            policy_decisions.push(PolicyDecisionRecord {
-                                tool_name: call.name.clone(),
-                                capability_tier: tier,
-                                decision: "deny".to_string(),
-                                reason: Some(reason.clone()),
-                            });
-                            executed_actions.push(format!("denied:{}:{}", call.name, reason));
-                        }
-                    }
-                }
 
-                if pending_confirmation && tool_results.is_empty() {
-                    "Confirmation required before executing requested tools.".to_string()
-                } else {
-                    match self.provider.chat(&messages, &tools, &tool_results, &provider_config) {
-                        ProviderReply::FinalText(text) => text,
-                        ProviderReply::ToolCalls(_) => {
-                            "Provider requested additional tool loop; scaffold executes a single tool round.".to_string()
+                    let tool_results_before = tool_results.len();
+                    let mut pending_confirmation = false;
+
+                    for call in calls {
+                        requested_tool_calls.push(call.name.clone());
+                        if !self.tool_registry.has_tool(&call.name) {
+                            executed_actions.push(format!("denied:{}:unknown_tool", call.name));
+                            proposed_actions.push(ActionEvent {
+                                tool_name: call.name.clone(),
+                                capability_tier: capability_tier_label(&CapabilityTier::SystemActions),
+                                status: "denied".to_string(),
+                                reason: Some("unknown_tool".to_string()),
+                                arguments_preview: Some(arguments_preview(&call.arguments_json)),
+                                evidence_summary: None,
+                            });
+                            policy_decisions.push(PolicyDecisionRecord {
+                                tool_name: call.name,
+                                capability_tier: CapabilityTier::SystemActions,
+                                decision: "deny".to_string(),
+                                reason: Some("unknown_tool".to_string()),
+                            });
+                            continue;
+                        }
+                        let tier = self.policy.capability_tier(&call);
+                        let auth = self.policy.authorize(
+                            &call,
+                            &PolicyContext {
+                                mode: mode.clone(),
+                                user_confirmed,
+                            },
+                        );
+                        match auth {
+                            Authorization::Allow => {
+                                proposed_actions.push(ActionEvent {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: capability_tier_label(&tier),
+                                    status: "approved".to_string(),
+                                    reason: None,
+                                    arguments_preview: Some(arguments_preview(&call.arguments_json)),
+                                    evidence_summary: None,
+                                });
+                                let result = self.action_backend.execute_tool(&call);
+                                let evidence_summary = result.evidence.summary.clone();
+                                executed_actions.push(call.name.clone());
+                                executed_action_events.push(ActionEvent {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: capability_tier_label(&tier),
+                                    status: "executed".to_string(),
+                                    reason: None,
+                                    arguments_preview: Some(arguments_preview(&call.arguments_json)),
+                                    evidence_summary: Some(evidence_summary),
+                                });
+                                policy_decisions.push(PolicyDecisionRecord {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: tier,
+                                    decision: "allow".to_string(),
+                                    reason: None,
+                                });
+                                tool_results.push(result);
+                            }
+                            Authorization::RequireConfirmation { reason } => {
+                                pending_confirmation = true;
+                                proposed_actions.push(ActionEvent {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: capability_tier_label(&tier),
+                                    status: "consent_required".to_string(),
+                                    reason: Some(reason.clone()),
+                                    arguments_preview: Some(arguments_preview(&call.arguments_json)),
+                                    evidence_summary: None,
+                                });
+                                policy_decisions.push(PolicyDecisionRecord {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: tier,
+                                    decision: "require_confirmation".to_string(),
+                                    reason: Some(reason.clone()),
+                                });
+                                executed_actions
+                                    .push(format!("confirm_required:{}:{}", call.name, reason));
+                            }
+                            Authorization::Deny { reason } => {
+                                proposed_actions.push(ActionEvent {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: capability_tier_label(&tier),
+                                    status: "denied".to_string(),
+                                    reason: Some(reason.clone()),
+                                    arguments_preview: Some(arguments_preview(&call.arguments_json)),
+                                    evidence_summary: None,
+                                });
+                                policy_decisions.push(PolicyDecisionRecord {
+                                    tool_name: call.name.clone(),
+                                    capability_tier: tier,
+                                    decision: "deny".to_string(),
+                                    reason: Some(reason.clone()),
+                                });
+                                executed_actions.push(format!("denied:{}:{}", call.name, reason));
+                            }
                         }
                     }
+
+                    if pending_confirmation && tool_results.len() == tool_results_before {
+                        break "Confirmation required before executing requested tools.".to_string();
+                    }
+
+                    provider_reply =
+                        self.provider.chat(&messages, &tools, &tool_results, &provider_config);
                 }
             }
         };
@@ -298,4 +310,86 @@ fn request_fingerprint(messages: &[ChatMessage], provider_config: &ProviderConfi
         message.content.hash(&mut hasher);
     }
     format!("req-{:016x}", hasher.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipc::{Evidence, ProviderConfig, ToolCall, ToolResult};
+    use providers::provider_trait::ProviderReply;
+    use serde_json::json;
+
+    struct MultiRoundProvider;
+
+    impl Provider for MultiRoundProvider {
+        fn name(&self) -> &'static str {
+            "multi-round-test"
+        }
+
+        fn chat(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[ipc::Tool],
+            tool_results: &[ToolResult],
+            _config: &ProviderConfig,
+        ) -> ProviderReply {
+            match tool_results.len() {
+                0 => ProviderReply::ToolCalls(vec![ToolCall {
+                    name: "echo".to_string(),
+                    arguments_json: json!({ "input": "one" }).to_string(),
+                }]),
+                1 => ProviderReply::ToolCalls(vec![ToolCall {
+                    name: "math.add".to_string(),
+                    arguments_json: json!({ "a": 2, "b": 3 }).to_string(),
+                }]),
+                _ => ProviderReply::FinalText("done after two rounds".to_string()),
+            }
+        }
+    }
+
+    struct TestActionBackend;
+
+    impl ActionBackend for TestActionBackend {
+        fn platform_name(&self) -> &'static str {
+            "test"
+        }
+
+        fn execute_tool(&self, tool_call: &ToolCall) -> ToolResult {
+            ToolResult {
+                name: tool_call.name.clone(),
+                result_json: json!({"ok": true, "tool": tool_call.name}).to_string(),
+                evidence: Evidence {
+                    summary: format!("executed {}", tool_call.name),
+                    artifacts: vec![],
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn orchestrator_supports_multiple_tool_rounds() {
+        let mut orchestrator = Orchestrator::new(
+            Policy::default(),
+            ToolRegistry::new_default(),
+            MultiRoundProvider,
+            TestActionBackend,
+        );
+
+        let response = orchestrator.run(
+            vec![ChatMessage {
+                role: "user".to_string(),
+                content: "do thing".to_string(),
+            }],
+            ProviderConfig {
+                provider_name: "multi-round-test".to_string(),
+                model: None,
+            },
+            ChatMode::BestEffort,
+        );
+
+        assert_eq!(response.final_text, "done after two rounds");
+        assert_eq!(response.executed_action_events.len(), 2);
+        assert_eq!(response.executed_action_events[0].tool_name, "echo");
+        assert_eq!(response.executed_action_events[1].tool_name, "math.add");
+    }
 }
