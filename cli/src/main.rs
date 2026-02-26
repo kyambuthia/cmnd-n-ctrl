@@ -452,7 +452,7 @@ fn positional_without_flags(args: &[String]) -> Vec<String> {
     while i < args.len() {
         match args[i].as_str() {
             "--json" | "--raw" => i += 1,
-            "--addr" | "--key" | "--provider" | "--session" | "--title" | "--path" | "--command" | "--name" | "--status" | "--limit" => {
+            "--addr" | "--key" | "--env" | "--provider" | "--session" | "--title" | "--path" | "--command" | "--name" | "--status" | "--limit" => {
                 i += 2
             }
             "--args" => i += 2,
@@ -593,12 +593,16 @@ fn handle_auth_command(client: &mut JsonRpcClient<AgentService>, args: &[String]
         }
         "login" => {
             if pos.len() < 2 {
-                eprintln!("usage: cli auth login <provider> --key <token>");
+                eprintln!("usage: cli auth login <provider> (--key <token> | --env <ENV_VAR>)");
                 std::process::exit(2);
             }
             let provider = pos[1].clone();
-            let key = string_flag(args, "--key").unwrap_or_default();
-            let cfg = json!({ "api_key": key }).to_string();
+            let cfg = if let Some(env_var) = string_flag(args, "--env") {
+                json!({ "api_key_env": env_var }).to_string()
+            } else {
+                let key = string_flag(args, "--key").unwrap_or_default();
+                json!({ "api_key": key }).to_string()
+            };
             let _ = backend_call_value(
                 client,
                 addr.as_deref(),

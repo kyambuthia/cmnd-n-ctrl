@@ -512,19 +512,23 @@ impl ChatService for AgentService {
 
     fn providers_list(&self) -> Result<Vec<ProviderInfo>, String> {
         let state = self.provider_state().unwrap_or_default();
-        let names = ["openai-stub", "anthropic-stub", "gemini-stub"];
+        let names = ["openai", "openai-stub", "anthropic-stub", "gemini-stub"];
         Ok(names
             .iter()
             .map(|name| {
                 let cfg = state.configs.get(*name).cloned().unwrap_or_else(|| "{}".to_string());
                 let has_auth = provider_config_has_auth(name, &cfg);
+                let auth_source = provider_config_auth_source(&cfg);
                 ProviderInfo {
                     name: (*name).to_string(),
                     enabled: true,
                     is_active: state.active_provider.as_deref() == Some(*name),
                     has_auth,
                     config_summary: if has_auth {
-                        "configured".to_string()
+                        match auth_source.as_deref() {
+                            Some("env") => "configured (env)".to_string(),
+                            _ => "configured".to_string(),
+                        }
                     } else {
                         "not configured".to_string()
                     },
@@ -883,7 +887,37 @@ fn provider_config_has_auth(provider_name: &str, config_json: &str) -> bool {
             .and_then(|v| v.as_str())
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false)
+    }) || ["api_key_env", "token_env"].iter().any(|field| {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(*field))
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
     })
+}
+
+fn provider_config_auth_source(config_json: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(config_json).ok()?;
+    if ["api_key_env", "token_env"].iter().any(|field| {
+        parsed
+            .get(*field)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }) {
+        return Some("env".to_string());
+    }
+    if ["api_key", "token"].iter().any(|field| {
+        parsed
+            .get(*field)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }) {
+        return Some("inline".to_string());
+    }
+    None
 }
 
 fn build_consent_request(
@@ -1296,5 +1330,22 @@ mod tests {
         let listed = service.mcp_servers_list().expect("list servers");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].status, "stopped");
+    }
+
+    #[test]
+    fn providers_list_recognizes_env_based_auth_config() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        service
+            .providers_config_set(ProviderConfigSetRequest {
+                provider_name: "openai".to_string(),
+                config_json: r#"{"api_key_env":"OPENAI_API_KEY"}"#.to_string(),
+            })
+            .expect("set provider config");
+
+        let providers = service.providers_list().expect("providers list");
+        let openai = providers.iter().find(|p| p.name == "openai").expect("openai provider");
+        assert!(openai.has_auth);
+        assert_eq!(openai.config_summary, "configured (env)");
     }
 }
