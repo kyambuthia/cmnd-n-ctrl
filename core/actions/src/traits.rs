@@ -77,6 +77,7 @@ impl ActionBackend for StubActionBackend {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: format!(
                     "{{\"status\":\"ok\",\"platform\":\"{}\",\"unix_seconds\":{}}}",
@@ -92,6 +93,7 @@ impl ActionBackend for StubActionBackend {
         if tool_call.name == "echo" {
             let input = args.get("input").and_then(Value::as_str).unwrap_or_default();
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -109,6 +111,7 @@ impl ActionBackend for StubActionBackend {
         if tool_call.name == "text.uppercase" {
             let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -128,6 +131,7 @@ impl ActionBackend for StubActionBackend {
             let a = args.get("a").and_then(Value::as_f64).unwrap_or(0.0);
             let b = args.get("b").and_then(Value::as_f64).unwrap_or(0.0);
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -181,6 +185,7 @@ impl ActionBackend for StubActionBackend {
                 .collect::<Vec<_>>();
             entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -225,6 +230,7 @@ impl ActionBackend for StubActionBackend {
             };
             let preview = truncate_chars(&raw, 2000);
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -288,6 +294,7 @@ impl ActionBackend for StubActionBackend {
                 rows.push(Value::Object(obj));
             }
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -346,6 +353,7 @@ impl ActionBackend for StubActionBackend {
             };
             let preview = preview_json(&parsed);
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -391,6 +399,7 @@ impl ActionBackend for StubActionBackend {
             let mut scanned_files = 0usize;
             search_text_recursive(&root, query, limit, &mut matches, &mut scanned_files);
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -442,6 +451,7 @@ impl ActionBackend for StubActionBackend {
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_secs());
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -497,6 +507,7 @@ impl ActionBackend for StubActionBackend {
                 );
             }
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -556,6 +567,7 @@ impl ActionBackend for StubActionBackend {
                 );
             }
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -598,6 +610,7 @@ impl ActionBackend for StubActionBackend {
                 );
             }
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -617,6 +630,7 @@ impl ActionBackend for StubActionBackend {
         if tool_call.name == "desktop.open_url" {
             let url = args.get("url").and_then(Value::as_str).unwrap_or("about:blank");
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -635,6 +649,7 @@ impl ActionBackend for StubActionBackend {
         if tool_call.name == "desktop.app.list" {
             let filter = args.get("filter").and_then(Value::as_str).unwrap_or_default();
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -657,6 +672,7 @@ impl ActionBackend for StubActionBackend {
         if tool_call.name == "desktop.app.activate" {
             let app = args.get("app").and_then(Value::as_str).unwrap_or("unknown");
             return ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({
                     "status": "ok",
@@ -673,6 +689,7 @@ impl ActionBackend for StubActionBackend {
         }
 
         ToolResult {
+            tool_call_id: None,
             name: tool_call.name.clone(),
             result_json: format!(
                 "{{\"status\":\"ok\",\"platform\":\"{}\",\"arguments\":{}}}",
@@ -695,6 +712,7 @@ fn tool_error(
 ) -> ToolResult {
     let code = code.into();
     ToolResult {
+        tool_call_id: None,
         name: tool_name.to_string(),
         result_json: json!({
             "status": "error",

@@ -237,6 +237,7 @@ mod tests {
                 provider_config: ProviderConfig {
                     provider_name: "openai-stub".to_string(),
                     model: None,
+                    config_json: None,
                 },
                 mode: ChatMode::RequireConfirmation,
             },

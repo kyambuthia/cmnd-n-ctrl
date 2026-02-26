@@ -171,7 +171,8 @@ where
                                     arguments_preview: Some(arguments_preview(&call.arguments_json)),
                                     evidence_summary: None,
                                 });
-                                let result = self.action_backend.execute_tool(&call);
+                                let mut result = self.action_backend.execute_tool(&call);
+                                result.tool_call_id = call.tool_call_id.clone();
                                 let evidence_summary = result.evidence.summary.clone();
                                 executed_actions.push(call.name.clone());
                                 executed_action_events.push(ActionEvent {
@@ -372,10 +373,12 @@ mod tests {
         ) -> ProviderReply {
             match tool_results.len() {
                 0 => ProviderReply::ToolCalls(vec![ToolCall {
+                    tool_call_id: None,
                     name: "echo".to_string(),
                     arguments_json: json!({ "input": "one" }).to_string(),
                 }]),
                 1 => ProviderReply::ToolCalls(vec![ToolCall {
+                    tool_call_id: None,
                     name: "math.add".to_string(),
                     arguments_json: json!({ "a": 2, "b": 3 }).to_string(),
                 }]),
@@ -393,6 +396,7 @@ mod tests {
 
         fn execute_tool(&self, tool_call: &ToolCall) -> ToolResult {
             ToolResult {
+                tool_call_id: None,
                 name: tool_call.name.clone(),
                 result_json: json!({"ok": true, "tool": tool_call.name}).to_string(),
                 evidence: Evidence {
@@ -420,6 +424,7 @@ mod tests {
             ProviderConfig {
                 provider_name: "multi-round-test".to_string(),
                 model: None,
+                config_json: None,
             },
             ChatMode::BestEffort,
         );

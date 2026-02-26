@@ -377,6 +377,29 @@ impl AgentService {
     fn write_provider_state(&self, state: &ProviderState) -> Result<(), String> {
         self.storage.write_provider_state(state).map_err(Self::io_err)
     }
+
+    fn enrich_provider_config_from_state(&self, provider_config: &mut ipc::ProviderConfig) {
+        let Ok(state) = self.provider_state() else {
+            return;
+        };
+        let cfg_json = state
+            .configs
+            .get(&provider_config.provider_name)
+            .cloned()
+            .unwrap_or_else(|| "{}".to_string());
+        if provider_config.config_json.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            provider_config.config_json = Some(cfg_json.clone());
+        }
+        if provider_config.model.is_none() {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cfg_json) {
+                provider_config.model = parsed
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.trim().is_empty());
+            }
+        }
+    }
 }
 
 impl ChatService for AgentService {
@@ -388,6 +411,7 @@ impl ChatService for AgentService {
                 }
             }
         }
+        self.enrich_provider_config_from_state(&mut params.provider_config);
         self.append_messages_to_session_if_requested(&params);
         self.rebuild_orchestrator(&params.provider_config.provider_name);
         let mut response = self.orchestrator.run(
@@ -1117,6 +1141,7 @@ mod tests {
             provider_config: ipc::ProviderConfig {
                 provider_name: "openai-stub".to_string(),
                 model: None,
+                config_json: None,
             },
             mode: ipc::ChatMode::RequireConfirmation,
         };
@@ -1177,6 +1202,7 @@ mod tests {
             provider_config: ipc::ProviderConfig {
                 provider_name: "openai-stub".to_string(),
                 model: None,
+                config_json: None,
             },
             mode: ipc::ChatMode::RequireConfirmation,
         };
@@ -1228,6 +1254,7 @@ mod tests {
                 provider_config: ipc::ProviderConfig {
                     provider_name: "openai-stub".to_string(),
                     model: None,
+                    config_json: None,
                 },
                 mode: ipc::ChatMode::RequireConfirmation,
             })
@@ -1282,6 +1309,7 @@ mod tests {
             provider_config: ipc::ProviderConfig {
                 provider_name: "openai-stub".to_string(),
                 model: None,
+                config_json: None,
             },
             mode: ipc::ChatMode::BestEffort,
         });
@@ -1311,6 +1339,7 @@ mod tests {
             provider_config: ipc::ProviderConfig {
                 provider_name: "openai-stub".to_string(),
                 model: None,
+                config_json: None,
             },
             mode: ipc::ChatMode::BestEffort,
         });
@@ -1342,6 +1371,7 @@ mod tests {
                 provider_config: ipc::ProviderConfig {
                     provider_name: "openai-stub".to_string(),
                     model: None,
+                    config_json: None,
                 },
                 mode: ipc::ChatMode::BestEffort,
             });
@@ -1372,6 +1402,7 @@ mod tests {
             provider_config: ipc::ProviderConfig {
                 provider_name: "openai-stub".to_string(),
                 model: None,
+                config_json: None,
             },
             mode: ipc::ChatMode::BestEffort,
         });

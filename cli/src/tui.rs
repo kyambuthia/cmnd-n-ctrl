@@ -499,6 +499,7 @@ fn send_chat(client: &mut JsonRpcClient<AgentService>, app: &mut TuiApp) -> Resu
         provider_config: ipc::ProviderConfig {
             provider_name: app.provider_name.clone(),
             model: None,
+            config_json: None,
         },
         mode: if app.require_confirmation {
             ChatMode::RequireConfirmation

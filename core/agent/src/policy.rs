@@ -92,6 +92,7 @@ mod tests {
 
     fn call(name: &str) -> ToolCall {
         ToolCall {
+            tool_call_id: None,
             name: name.to_string(),
             arguments_json: "{}".to_string(),
         }

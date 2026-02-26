@@ -15,6 +15,8 @@ pub struct Tool {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
     pub name: String,
     pub arguments_json: JsonBlob,
 }
@@ -27,6 +29,8 @@ pub struct Evidence {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
     pub name: String,
     pub result_json: JsonBlob,
     pub evidence: Evidence,
@@ -42,6 +46,8 @@ pub struct ChatMessage {
 pub struct ProviderConfig {
     pub provider_name: String,
     pub model: Option<String>,
+    #[serde(default)]
+    pub config_json: Option<JsonBlob>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

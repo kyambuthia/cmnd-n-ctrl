@@ -46,6 +46,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "desktop.open_url") {
             let url = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "desktop.open_url".to_string(),
                 arguments_json: json!({
                     "url": if url.is_empty() { "https://example.com" } else { url }
@@ -59,6 +60,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.list") {
             let path = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.list".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "." } else { path }
@@ -72,6 +74,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.read_text") {
             let path = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.read_text".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "README.md" } else { path }
@@ -85,6 +88,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.read_csv") {
             let path = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.read_csv".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "data.csv" } else { path },
@@ -99,6 +103,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.read_json") {
             let path = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.read_json".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "package.json" } else { path }
@@ -112,6 +117,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.stat") {
             let path = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.stat".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "." } else { path }
@@ -127,6 +133,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
             let query = parts.next().unwrap_or("").trim();
             let path = parts.next().unwrap_or(".").trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.search_text".to_string(),
                 arguments_json: json!({
                     "query": if query.is_empty() { "TODO" } else { query },
@@ -142,6 +149,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.write_text") {
             let (path, content) = rest.split_once("::").map(|(a, b)| (a.trim(), b.trim())).unwrap_or(("notes/generated.txt", rest.trim()));
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.write_text".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "notes/generated.txt" } else { path },
@@ -159,6 +167,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
                 .map(|(a, b)| (a.trim(), b.trim()))
                 .unwrap_or(("notes/generated.txt", rest.trim()));
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.append_text".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "notes/generated.txt" } else { path },
@@ -173,6 +182,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "file.mkdir") {
             let path = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "file.mkdir".to_string(),
                 arguments_json: json!({
                     "path": if path.is_empty() { "notes" } else { path }
@@ -184,6 +194,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
 
     if prompt.to_ascii_lowercase().contains("tool:apps") && has_tool(tools, "desktop.app.list") {
         return Some(ToolCall {
+            tool_call_id: None,
             name: "desktop.app.list".to_string(),
             arguments_json: json!({ "filter": "" }).to_string(),
         });
@@ -193,6 +204,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "desktop.app.activate") {
             let app = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "desktop.app.activate".to_string(),
                 arguments_json: json!({ "app": if app.is_empty() { "Browser" } else { app } }).to_string(),
             });
@@ -207,6 +219,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
             let a = nums.next().unwrap_or(2.0);
             let b = nums.next().unwrap_or(3.0);
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "math.add".to_string(),
                 arguments_json: json!({ "a": a, "b": b }).to_string(),
             });
@@ -217,6 +230,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "text.uppercase") {
             let text = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "text.uppercase".to_string(),
                 arguments_json: json!({ "text": if text.is_empty() { "stub" } else { text } }).to_string(),
             });
@@ -227,6 +241,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         if has_tool(tools, "echo") {
             let input = rest.trim();
             return Some(ToolCall {
+                tool_call_id: None,
                 name: "echo".to_string(),
                 arguments_json: json!({ "input": if input.is_empty() { "stub" } else { input } }).to_string(),
             });
@@ -235,6 +250,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
 
     if prompt.to_ascii_lowercase().contains("tool:time") && has_tool(tools, "time.now") {
         return Some(ToolCall {
+            tool_call_id: None,
             name: "time.now".to_string(),
             arguments_json: "{}".to_string(),
         });
@@ -245,6 +261,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         .map(|t| t.name.clone())
         .unwrap_or_else(|| "echo".to_string());
     Some(ToolCall {
+        tool_call_id: None,
         name: first_tool,
         arguments_json: json!({ "input": "stub" }).to_string(),
     })

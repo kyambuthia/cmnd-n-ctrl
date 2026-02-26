@@ -183,6 +183,7 @@ fn main() {
                 provider_config: ProviderConfig {
                     provider_name,
                     model: None,
+                    config_json: None,
                 },
                 mode: if require_confirmation {
                     ChatMode::RequireConfirmation

@@ -19,44 +19,33 @@ impl Provider for OpenAiHttpProvider {
         tool_results: &[ToolResult],
         config: &ProviderConfig,
     ) -> ProviderReply {
-        let api_key = match resolve_api_key() {
+        let provider_cfg = ProviderRuntimeConfig::from_provider_config(config);
+        let api_key = match resolve_api_key(config) {
             Some(v) => v,
             None => {
                 return ProviderReply::FinalText(
-                    "OpenAI provider is selected but OPENAI_API_KEY (or OPENAI_API_KEY_FILE) is not configured."
+                    "OpenAI-compatible provider is selected but no API key was found in provider config or environment."
                         .to_string(),
                 )
             }
         };
 
-        let base_url = env::var("OPENAI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com".to_string())
+        let base_url = provider_cfg
+            .base_url
+            .or_else(|| env::var("OPENAI_BASE_URL").ok())
+            .unwrap_or_else(|| "https://api.openai.com".to_string())
             .trim_end_matches('/')
             .to_string();
-        let model = config
+        let model = provider_cfg
             .model
-            .clone()
+            .or_else(|| config.model.clone())
             .or_else(|| env::var("OPENAI_MODEL").ok())
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| "gpt-4.1-mini".to_string());
 
-        let mut combined = messages.to_vec();
-        if !tool_results.is_empty() {
-            combined.push(ChatMessage {
-                role: "system".to_string(),
-                content: format!(
-                    "Tool results (JSON): {}",
-                    serde_json::to_string(tool_results).unwrap_or_else(|_| "[]".to_string())
-                ),
-            });
-        }
-
         let body = json!({
             "model": model,
-            "messages": combined
-                .iter()
-                .map(|m| json!({"role": m.role, "content": m.content}))
-                .collect::<Vec<_>>(),
+            "messages": build_openai_messages(messages, tool_results),
             "tools": build_openai_tools(tools),
             "tool_choice": "auto",
         });
@@ -121,6 +110,10 @@ fn interpret_chat_completion_payload(payload: &Value) -> ProviderReply {
             let Some(function) = call.get("function") else {
                 continue;
             };
+            let tool_call_id = call
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
             let Some(name) = function.get("name").and_then(Value::as_str) else {
                 continue;
             };
@@ -130,6 +123,7 @@ fn interpret_chat_completion_payload(payload: &Value) -> ProviderReply {
                 .unwrap_or("{}")
                 .to_string();
             calls.push(ToolCall {
+                tool_call_id,
                 name: name.to_string(),
                 arguments_json,
             });
@@ -170,7 +164,98 @@ fn extract_message_text(message: &Value) -> Option<String> {
     }
 }
 
-fn resolve_api_key() -> Option<String> {
+fn build_openai_messages(messages: &[ChatMessage], tool_results: &[ToolResult]) -> Vec<Value> {
+    let mut out = messages
+        .iter()
+        .map(|m| json!({"role": m.role, "content": m.content}))
+        .collect::<Vec<_>>();
+
+    if tool_results.is_empty() {
+        return out;
+    }
+
+    // Reconstruct a minimal assistant tool-call message so OpenAI-compatible APIs can accept the
+    // subsequent tool role messages on the next round.
+    let tool_calls = tool_results
+        .iter()
+        .enumerate()
+        .map(|(idx, r)| {
+            let call_id = r
+                .tool_call_id
+                .clone()
+                .unwrap_or_else(|| format!("call_stub_{idx}"));
+            json!({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": r.name,
+                    "arguments": "{}"
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    out.push(json!({
+        "role": "assistant",
+        "content": null,
+        "tool_calls": tool_calls
+    }));
+
+    for (idx, r) in tool_results.iter().enumerate() {
+        let call_id = r
+            .tool_call_id
+            .clone()
+            .unwrap_or_else(|| format!("call_stub_{idx}"));
+        out.push(json!({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": r.result_json
+        }));
+    }
+
+    out
+}
+
+#[derive(Debug, Default)]
+struct ProviderRuntimeConfig {
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+    api_key_env: Option<String>,
+}
+
+impl ProviderRuntimeConfig {
+    fn from_provider_config(config: &ProviderConfig) -> Self {
+        let mut out = Self::default();
+        let Some(raw) = config.config_json.as_deref() else {
+            return out;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(raw) else {
+            return out;
+        };
+        out.base_url = v.get("base_url").and_then(Value::as_str).map(|s| s.to_string());
+        out.model = v.get("model").and_then(Value::as_str).map(|s| s.to_string());
+        out.api_key = v.get("api_key").and_then(Value::as_str).map(|s| s.to_string());
+        out.api_key_env = v
+            .get("api_key_env")
+            .or_else(|| v.get("token_env"))
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        out
+    }
+}
+
+fn resolve_api_key(config: &ProviderConfig) -> Option<String> {
+    let runtime = ProviderRuntimeConfig::from_provider_config(config);
+    if let Some(key) = runtime.api_key.filter(|s| !s.trim().is_empty()) {
+        return Some(key);
+    }
+    if let Some(env_name) = runtime.api_key_env {
+        if let Ok(key) = env::var(env_name) {
+            if !key.trim().is_empty() {
+                return Some(key);
+            }
+        }
+    }
     if let Ok(key) = env::var("OPENAI_API_KEY") {
         if !key.trim().is_empty() {
             return Some(key);
@@ -213,6 +298,7 @@ mod tests {
         match interpret_chat_completion_payload(&payload) {
             ProviderReply::ToolCalls(calls) => {
                 assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool_call_id.as_deref(), Some("call_1"));
                 assert_eq!(calls[0].name, "file.list");
                 assert_eq!(calls[0].arguments_json, "{\"path\":\".\"}");
             }
@@ -235,5 +321,21 @@ mod tests {
             ProviderReply::FinalText(text) => assert_eq!(text, "hello world"),
             ProviderReply::ToolCalls(_) => panic!("expected final text"),
         }
+    }
+
+    #[test]
+    fn provider_runtime_config_reads_alias_settings() {
+        let cfg = ProviderConfig {
+            provider_name: "ollama-local".to_string(),
+            model: None,
+            config_json: Some(
+                r#"{"base_url":"http://127.0.0.1:11434/v1","model":"qwen","api_key_env":"OLLAMA_TOKEN"}"#
+                    .to_string(),
+            ),
+        };
+        let parsed = ProviderRuntimeConfig::from_provider_config(&cfg);
+        assert_eq!(parsed.base_url.as_deref(), Some("http://127.0.0.1:11434/v1"));
+        assert_eq!(parsed.model.as_deref(), Some("qwen"));
+        assert_eq!(parsed.api_key_env.as_deref(), Some("OLLAMA_TOKEN"));
     }
 }
