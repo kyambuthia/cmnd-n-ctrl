@@ -54,7 +54,7 @@ fn print_help() {
     println!("  cli mcp servers list|add|rm|start|stop ...");
     println!("  cli project open|status ...");
     println!("  cli audit list|show ...");
-    println!("  cli doctor [--json] [--addr <host:port>]");
+    println!("  cli doctor [--json] [--strict] [--addr <host:port>]");
     println!("  cli tui   # interactive terminal UI (ratatui)");
     println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
@@ -455,7 +455,7 @@ fn positional_without_flags(args: &[String]) -> Vec<String> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--json" | "--raw" => i += 1,
+            "--json" | "--raw" | "--strict" => i += 1,
             "--addr" | "--key" | "--env" | "--provider" | "--session" | "--title" | "--path" | "--command" | "--name" | "--status" | "--limit" => {
                 i += 2
             }
@@ -774,6 +774,7 @@ fn handle_audit_command(client: &mut JsonRpcClient<AgentService>, args: &[String
 
 fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
     let json_output = has_flag(args, "--json");
+    let strict = has_flag(args, "--strict");
     let addr = parse_addr_flag(args);
     let result = backend_call_value(client, addr.as_deref(), "system.health", json!({}))
         .unwrap_or_else(|err| {
@@ -783,14 +784,25 @@ fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[Strin
 
     if json_output {
         print_value(&result, true);
+        if strict
+            && result
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .map(|ok| !ok)
+                .unwrap_or(false)
+        {
+            std::process::exit(3);
+        }
         return;
     }
 
     println!("backend: ok");
+    let mut has_warnings = false;
     if let Some(obj) = result.as_object() {
         if let Some(ok) = obj.get("ok").and_then(|v| v.as_bool()) {
             if !ok {
                 println!("status: warnings present");
+                has_warnings = true;
             }
         }
         println!(
@@ -820,6 +832,7 @@ fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[Strin
         );
         if let Some(warnings) = obj.get("warnings").and_then(|v| v.as_array()) {
             if !warnings.is_empty() {
+                has_warnings = true;
                 println!("warnings:");
                 for warning in warnings {
                     if let Some(text) = warning.as_str() {
@@ -830,6 +843,10 @@ fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[Strin
         }
     } else {
         print_value(&result, false);
+    }
+
+    if strict && has_warnings {
+        std::process::exit(3);
     }
 }
 
