@@ -7,7 +7,7 @@ use ipc::{
     ActionEvent, AuditEntry, AuditGetRequest, AuditListRequest, ChatApproveRequest, ChatDenyRequest,
     ChatRequest, ChatResponse, ChatService, ConsentActionRequest, ConsentListRequest, ConsentRequest,
     McpServerAddRequest, McpServerMutationResponse, McpServerRecord, McpServerRemoveRequest,
-    McpServerStateRequest, PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse,
+    McpServerProbeResponse, McpServerStateRequest, PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse,
     ProjectStatusRequest, ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
     ProviderConfigSetRequest, ProviderConfigSetResponse, ProviderInfo, ProvidersSetRequest, Session,
     SessionCreateRequest, SessionDeleteRequest, SessionDeleteResponse, SessionGetRequest,
@@ -15,14 +15,18 @@ use ipc::{
     Tool,
 };
 use providers::ProviderChoice;
+use ipc::mcp::{read_stdio_frame_from, write_stdio_frame_to};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::env;
+use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use storage::{FileStorage, PendingConsentState, ProjectState, ProviderState, Storage};
 
 use crate::orchestrator::Orchestrator;
@@ -38,7 +42,74 @@ pub struct AgentService {
     consent_counter: u64,
     session_counter: u64,
     mcp_counter: u64,
-    mcp_processes: RefCell<HashMap<String, Child>>,
+    mcp_processes: RefCell<HashMap<String, McpRuntimeProcess>>,
+}
+
+struct McpRuntimeProcess {
+    child: Child,
+    stdio: Option<McpStdioClient>,
+}
+
+struct McpStdioClient {
+    tx: Sender<String>,
+    rx: Receiver<String>,
+    next_request_id: u64,
+}
+
+impl McpRuntimeProcess {
+    fn spawn(command: &str, args: &[String]) -> Result<Self, String> {
+        let mut child = Command::new(command)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(AgentService::io_err)?;
+
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stdio = match (stdin, stdout) {
+            (Some(stdin), Some(stdout)) => Some(McpStdioClient::new(stdin, stdout)),
+            _ => None,
+        };
+
+        Ok(Self { child, stdio })
+    }
+}
+
+impl McpStdioClient {
+    fn new(mut stdin: std::process::ChildStdin, stdout: std::process::ChildStdout) -> Self {
+        let (tx_write, rx_write) = mpsc::channel::<String>();
+        let (tx_read, rx_read) = mpsc::channel::<String>();
+
+        thread::spawn(move || {
+            while let Ok(payload) = rx_write.recv() {
+                if write_stdio_frame_to(&mut stdin, &payload).is_err() {
+                    break;
+                }
+            }
+        });
+
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match read_stdio_frame_from(&mut reader) {
+                    Ok(Some(payload)) => {
+                        if tx_read.send(payload).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) | Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            tx: tx_write,
+            rx: rx_read,
+            next_request_id: 0,
+        }
+    }
 }
 
 impl AgentService {
@@ -672,12 +743,30 @@ impl ChatService for AgentService {
             .cloned()
             .ok_or_else(|| "mcp server not found".to_string())?;
         self.mcp_spawn_server_process(&record.id, &record.command, &record.args)?;
+        let _ = self.mcp_probe_initialize(&record.id);
         self.set_mcp_server_status(&params.server_id, "running")
     }
 
     fn mcp_servers_stop(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String> {
         self.mcp_stop_server_process(&params.server_id)?;
         self.set_mcp_server_status(&params.server_id, "stopped")
+    }
+
+    fn mcp_servers_probe(&self, params: McpServerStateRequest) -> Result<McpServerProbeResponse, String> {
+        match self.mcp_probe_initialize(&params.server_id) {
+            Ok(result_json) => Ok(McpServerProbeResponse {
+                server_id: params.server_id,
+                ok: true,
+                result_json: Some(result_json),
+                error: None,
+            }),
+            Err(err) => Ok(McpServerProbeResponse {
+                server_id: params.server_id,
+                ok: false,
+                result_json: None,
+                error: Some(err),
+            }),
+        }
     }
 
     fn project_open(&mut self, params: ProjectOpenRequest) -> Result<ProjectOpenResponse, String> {
@@ -842,34 +931,27 @@ impl AgentService {
         args: &[String],
     ) -> Result<(), String> {
         let mut processes = self.mcp_processes.borrow_mut();
-        if let Some(child) = processes.get_mut(server_id) {
-            match child.try_wait().map_err(Self::io_err)? {
+        if let Some(runtime) = processes.get_mut(server_id) {
+            match runtime.child.try_wait().map_err(Self::io_err)? {
                 None => return Ok(()),
                 Some(_) => {
                     let _ = processes.remove(server_id);
                 }
             }
         }
-
-        let child = Command::new(command)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(Self::io_err)?;
-        processes.insert(server_id.to_string(), child);
+        let runtime = McpRuntimeProcess::spawn(command, args)?;
+        processes.insert(server_id.to_string(), runtime);
         Ok(())
     }
 
     fn mcp_stop_server_process(&mut self, server_id: &str) -> Result<(), String> {
-        let Some(mut child) = self.mcp_processes.borrow_mut().remove(server_id) else {
+        let Some(mut runtime) = self.mcp_processes.borrow_mut().remove(server_id) else {
             return Ok(());
         };
 
-        if child.try_wait().map_err(Self::io_err)?.is_none() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if runtime.child.try_wait().map_err(Self::io_err)?.is_none() {
+            let _ = runtime.child.kill();
+            let _ = runtime.child.wait();
         }
         Ok(())
     }
@@ -893,8 +975,8 @@ impl AgentService {
         let mut exited_ids = Vec::new();
         {
             let mut processes = self.mcp_processes.borrow_mut();
-            for (server_id, child) in processes.iter_mut() {
-                if child.try_wait().map_err(Self::io_err)?.is_some() {
+            for (server_id, runtime) in processes.iter_mut() {
+                if runtime.child.try_wait().map_err(Self::io_err)?.is_some() {
                     exited_ids.push(server_id.clone());
                 }
             }
@@ -919,6 +1001,63 @@ impl AgentService {
             self.storage.write_mcp_servers(&items).map_err(Self::io_err)?;
         }
         Ok(())
+    }
+
+    fn mcp_probe_initialize(&self, server_id: &str) -> Result<String, String> {
+        self.mcp_request(server_id, "initialize", r#"{"protocol":"jsonrpc-stdio","mcp_envelope":true}"#)
+    }
+
+    fn mcp_request(&self, server_id: &str, method: &str, params_json: &str) -> Result<String, String> {
+        let timeout = Duration::from_millis(800);
+        let deadline = Instant::now() + timeout;
+        let mut processes = self.mcp_processes.borrow_mut();
+        let runtime = processes
+            .get_mut(server_id)
+            .ok_or_else(|| "mcp server is not running".to_string())?;
+        let stdio = runtime
+            .stdio
+            .as_mut()
+            .ok_or_else(|| "mcp server stdio is unavailable".to_string())?;
+
+        stdio.next_request_id += 1;
+        let request_id = stdio.next_request_id;
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": serde_json::from_str::<serde_json::Value>(params_json)
+                .unwrap_or_else(|_| serde_json::json!({}))
+        })
+        .to_string();
+        stdio
+            .tx
+            .send(payload)
+            .map_err(|_| "failed to send mcp request to process".to_string())?;
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(format!("mcp request timeout waiting for {method} response"));
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let raw = stdio
+                .rx
+                .recv_timeout(remaining)
+                .map_err(|_| format!("mcp request timeout waiting for {method} response"))?;
+            let value = serde_json::from_str::<serde_json::Value>(&raw)
+                .map_err(|err| format!("invalid mcp jsonrpc response: {err}"))?;
+            let id = value.get("id").and_then(|v| v.as_u64());
+            if id != Some(request_id) {
+                continue;
+            }
+            if let Some(err) = value.get("error") {
+                return Err(format!("mcp {method} error: {err}"));
+            }
+            return Ok(value
+                .get("result")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string()));
+        }
     }
 }
 
@@ -1480,6 +1619,47 @@ mod tests {
             .find(|s| s.id == server.id)
             .expect("server in list");
         assert_eq!(record.status, "stopped");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_servers_probe_reads_initialize_response_over_stdio() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let script = r#"p1='{"jsonrpc":"2.0","id":1,"result":{"server":"stub"}}'
+p2='{"jsonrpc":"2.0","id":2,"result":{"server":"stub"}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#p1}" "$p1"
+printf 'Content-Length: %s\r\n\r\n%s' "${#p2}" "$p2"
+sleep 1"#;
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "probeable".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+
+        let probe = service
+            .mcp_servers_probe(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("probe server");
+        assert!(probe.ok);
+        assert!(probe
+            .result_json
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"server\":\"stub\""));
+
+        let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
     }
 
     #[test]
