@@ -296,6 +296,7 @@ pub struct ChatResponse {
     pub final_text: String,
     pub audit_id: String,
     pub request_fingerprint: String,
+    pub execution_state: String,
     pub consent_token: Option<String>,
     pub session_id: Option<String>,
     pub consent_request: Option<ConsentRequest>,

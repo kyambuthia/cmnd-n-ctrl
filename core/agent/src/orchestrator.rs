@@ -256,6 +256,7 @@ where
             final_text,
             audit_id,
             request_fingerprint,
+            execution_state: "completed".to_string(),
             consent_token: None,
             session_id: None,
             consent_request: None,

@@ -315,6 +315,7 @@ impl AgentService {
             final_text: "User denied consent for requested actions.".to_string(),
             audit_id,
             request_fingerprint: pending.record.request_fingerprint.clone(),
+            execution_state: "denied".to_string(),
             consent_token: None,
             session_id: pending.record.session_id.clone(),
             consent_request: None,
@@ -395,6 +396,11 @@ impl ChatService for AgentService {
         response.audit_id = self.next_synthetic_audit_id();
         response.session_id = params.session_id.clone();
         let _ = self.attach_or_create_consent(&params, &mut response);
+        response.execution_state = if response.consent_token.is_some() {
+            "awaiting_consent".to_string()
+        } else {
+            "completed".to_string()
+        };
         self.append_assistant_message_to_session_if_requested(
             response.session_id.as_deref(),
             &response.final_text,
@@ -412,6 +418,7 @@ impl ChatService for AgentService {
                 .run_with_confirmation(req.messages, req.provider_config.clone(), req.mode, true);
         response.audit_id = self.next_synthetic_audit_id();
         response.session_id = pending.record.session_id.clone();
+        response.execution_state = "completed".to_string();
         response.consent_token = None;
         response.consent_request = None;
         self.append_assistant_message_to_session_if_requested(

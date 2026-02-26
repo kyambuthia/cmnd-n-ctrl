@@ -254,8 +254,9 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
 
     let detail_text = if let Some(resp) = &app.last_chat_response {
         format!(
-            "audit_id: {}\nrequest: {}\nactions: {}\nproposed: {}\nexecuted: {}",
+            "audit_id: {}\nstate: {}\nrequest: {}\nactions: {}\nproposed: {}\nexecuted: {}",
             resp.audit_id,
+            resp.execution_state,
             resp.request_fingerprint,
             if resp.actions_executed.is_empty() {
                 "(none)".to_string()

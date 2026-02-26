@@ -786,6 +786,7 @@ fn print_chat_response(response: &ChatResponse, json_output: bool) {
 
     println!("audit_id: {}", response.audit_id);
     println!("request_fingerprint: {}", response.request_fingerprint);
+    println!("execution_state: {}", response.execution_state);
     if let Some(consent_token) = &response.consent_token {
         println!("consent_token: {}", consent_token);
     }
