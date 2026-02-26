@@ -1,6 +1,6 @@
 use std::env;
 
-use ipc::{ChatMessage, ProviderConfig, Tool, ToolResult};
+use ipc::{ChatMessage, ProviderConfig, Tool, ToolCall, ToolResult};
 use serde_json::{json, Value};
 
 use crate::provider_trait::{Provider, ProviderReply};
@@ -15,7 +15,7 @@ impl Provider for OpenAiHttpProvider {
     fn chat(
         &self,
         messages: &[ChatMessage],
-        _tools: &[Tool],
+        tools: &[Tool],
         tool_results: &[ToolResult],
         config: &ProviderConfig,
     ) -> ProviderReply {
@@ -57,6 +57,8 @@ impl Provider for OpenAiHttpProvider {
                 .iter()
                 .map(|m| json!({"role": m.role, "content": m.content}))
                 .collect::<Vec<_>>(),
+            "tools": build_openai_tools(tools),
+            "tool_choice": "auto",
         });
 
         let url = format!("{base_url}/v1/chat/completions");
@@ -82,21 +84,89 @@ impl Provider for OpenAiHttpProvider {
             }
         };
 
-        let text = payload
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(Value::as_str)
-            .map(|s| s.to_string())
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| {
-                "OpenAI provider returned no text content. Tool-calling integration for the real provider is not implemented yet."
-                    .to_string()
-            });
+        interpret_chat_completion_payload(&payload)
+    }
+}
 
-        ProviderReply::FinalText(text)
+fn build_openai_tools(tools: &[Tool]) -> Vec<Value> {
+    tools.iter()
+        .map(|tool| {
+            let parameters = serde_json::from_str::<Value>(&tool.input_json_schema)
+                .unwrap_or_else(|_| json!({"type":"object"}));
+            json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": parameters
+                }
+            })
+        })
+        .collect()
+}
+
+fn interpret_chat_completion_payload(payload: &Value) -> ProviderReply {
+    let Some(message) = payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|c| c.get("message"))
+    else {
+        return ProviderReply::FinalText("OpenAI provider returned no choices.".to_string());
+    };
+
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        let mut calls = Vec::new();
+        for call in tool_calls {
+            let Some(function) = call.get("function") else {
+                continue;
+            };
+            let Some(name) = function.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let arguments_json = function
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}")
+                .to_string();
+            calls.push(ToolCall {
+                name: name.to_string(),
+                arguments_json,
+            });
+        }
+        if !calls.is_empty() {
+            return ProviderReply::ToolCalls(calls);
+        }
+    }
+
+    let text = extract_message_text(message).unwrap_or_else(|| {
+        "OpenAI provider returned no text content and no tool calls.".to_string()
+    });
+    ProviderReply::FinalText(text)
+}
+
+fn extract_message_text(message: &Value) -> Option<String> {
+    if let Some(s) = message.get("content").and_then(Value::as_str) {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+
+    // Some APIs may return structured content arrays. Concatenate text fragments conservatively.
+    let parts = message.get("content").and_then(Value::as_array)?;
+    let mut text = String::new();
+    for part in parts {
+        if let Some(s) = part.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(s);
+        }
+    }
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
     }
 }
 
@@ -116,3 +186,54 @@ fn resolve_api_key() -> Option<String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider_trait::ProviderReply;
+
+    #[test]
+    fn interprets_tool_calls_from_chat_completions_payload() {
+        let payload = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "file.list",
+                            "arguments": "{\"path\":\".\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        match interpret_chat_completion_payload(&payload) {
+            ProviderReply::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "file.list");
+                assert_eq!(calls[0].arguments_json, "{\"path\":\".\"}");
+            }
+            ProviderReply::FinalText(text) => panic!("expected tool calls, got text: {text}"),
+        }
+    }
+
+    #[test]
+    fn interprets_text_from_chat_completions_payload() {
+        let payload = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello world"
+                }
+            }]
+        });
+
+        match interpret_chat_completion_payload(&payload) {
+            ProviderReply::FinalText(text) => assert_eq!(text, "hello world"),
+            ProviderReply::ToolCalls(_) => panic!("expected final text"),
+        }
+    }
+}
