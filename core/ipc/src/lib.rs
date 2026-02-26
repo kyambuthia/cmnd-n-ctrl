@@ -197,6 +197,14 @@ pub struct McpServerProbeResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerToolsResponse {
+    pub server_id: String,
+    pub ok: bool,
+    pub tools: Vec<Tool>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServerMutationResponse {
     pub ok: bool,
     pub server: Option<McpServerRecord>,
@@ -360,6 +368,7 @@ pub trait ChatService {
     fn mcp_servers_start(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String>;
     fn mcp_servers_stop(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String>;
     fn mcp_servers_probe(&self, params: McpServerStateRequest) -> Result<McpServerProbeResponse, String>;
+    fn mcp_servers_tools(&self, params: McpServerStateRequest) -> Result<McpServerToolsResponse, String>;
     fn project_open(&mut self, params: ProjectOpenRequest) -> Result<ProjectOpenResponse, String>;
     fn project_status(&self, params: ProjectStatusRequest) -> Result<ProjectStatusResponse, String>;
     fn audit_list(&self, params: AuditListRequest) -> Result<Vec<AuditEntry>, String>;
@@ -443,6 +452,7 @@ where
             }
             "mcp.servers.stop" => self.parse_and_call(&request, |s, p: McpServerStateRequest| s.mcp_servers_stop(p)),
             "mcp.servers.probe" => self.parse_and_call(&request, |s, p: McpServerStateRequest| s.mcp_servers_probe(p)),
+            "mcp.servers.tools" => self.parse_and_call(&request, |s, p: McpServerStateRequest| s.mcp_servers_tools(p)),
             "project.open" => self.parse_and_call(&request, |s, p: ProjectOpenRequest| s.project_open(p)),
             "project.status" => self.parse_and_call(&request, |s, p: ProjectStatusRequest| s.project_status(p)),
             "audit.list" => self.parse_and_call(&request, |s, p: AuditListRequest| s.audit_list(p)),

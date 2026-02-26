@@ -7,8 +7,9 @@ use ipc::{
     ActionEvent, AuditEntry, AuditGetRequest, AuditListRequest, ChatApproveRequest, ChatDenyRequest,
     ChatRequest, ChatResponse, ChatService, ConsentActionRequest, ConsentListRequest, ConsentRequest,
     McpServerAddRequest, McpServerMutationResponse, McpServerRecord, McpServerRemoveRequest,
-    McpServerProbeResponse, McpServerStateRequest, PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse,
-    ProjectStatusRequest, ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
+    McpServerProbeResponse, McpServerStateRequest, McpServerToolsResponse, PendingConsentRecord,
+    ProjectOpenRequest, ProjectOpenResponse, ProjectStatusRequest, ProjectStatusResponse,
+    ProviderConfigGetRequest, ProviderConfigRecord,
     ProviderConfigSetRequest, ProviderConfigSetResponse, ProviderInfo, ProvidersSetRequest, Session,
     SessionCreateRequest, SessionDeleteRequest, SessionDeleteResponse, SessionGetRequest,
     SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, SystemHealthResponse,
@@ -769,6 +770,26 @@ impl ChatService for AgentService {
         }
     }
 
+    fn mcp_servers_tools(&self, params: McpServerStateRequest) -> Result<McpServerToolsResponse, String> {
+        match self.mcp_request(&params.server_id, "tools/list", "{}") {
+            Ok(result_json) => {
+                let tools = parse_mcp_tools_list_result(&result_json);
+                Ok(McpServerToolsResponse {
+                    server_id: params.server_id,
+                    ok: true,
+                    tools,
+                    error: None,
+                })
+            }
+            Err(err) => Ok(McpServerToolsResponse {
+                server_id: params.server_id,
+                ok: false,
+                tools: Vec::new(),
+                error: Some(err),
+            }),
+        }
+    }
+
     fn project_open(&mut self, params: ProjectOpenRequest) -> Result<ProjectOpenResponse, String> {
         let path = Path::new(&params.path);
         let response = ProjectOpenResponse {
@@ -1073,6 +1094,40 @@ impl Drop for AgentService {
             let _ = self.mcp_stop_server_process(&id);
         }
     }
+}
+
+fn parse_mcp_tools_list_result(result_json: &str) -> Vec<Tool> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(result_json) else {
+        return Vec::new();
+    };
+    let Some(items) = value.get("tools").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    items.iter()
+        .filter_map(|item| {
+            let name = item.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let description = item
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let schema = item
+                .get("inputSchema")
+                .cloned()
+                .or_else(|| item.get("input_schema").cloned())
+                .unwrap_or_else(|| serde_json::json!({"type":"object"}));
+            Some(Tool {
+                name,
+                description,
+                input_json_schema: serde_json::to_string(&schema)
+                    .unwrap_or_else(|_| "{\"type\":\"object\"}".to_string()),
+            })
+        })
+        .collect()
 }
 
 fn provider_config_has_auth(provider_name: &str, config_json: &str) -> bool {
@@ -1658,6 +1713,46 @@ sleep 1"#;
             .as_deref()
             .unwrap_or_default()
             .contains("\"server\":\"stub\""));
+
+        let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_servers_tools_reads_tools_list_response_over_stdio() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let script = r#"p1='{"jsonrpc":"2.0","id":1,"result":{"server":"stub"}}'
+p2='{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"browser.open","description":"Open a page","inputSchema":{"type":"object","properties":{"url":{"type":"string"}}}}]}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#p1}" "$p1"
+printf 'Content-Length: %s\r\n\r\n%s' "${#p2}" "$p2"
+sleep 1"#;
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "tooling".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+
+        let listed = service
+            .mcp_servers_tools(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("list mcp tools");
+        assert!(listed.ok);
+        assert_eq!(listed.tools.len(), 1);
+        assert_eq!(listed.tools[0].name, "browser.open");
+        assert_eq!(listed.tools[0].description, "Open a page");
+        assert!(listed.tools[0].input_json_schema.contains("\"url\""));
 
         let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
     }
