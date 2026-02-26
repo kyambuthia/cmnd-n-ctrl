@@ -14,9 +14,12 @@ use ipc::{
     SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, Tool,
 };
 use providers::ProviderChoice;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 use storage::{FileStorage, PendingConsentState, ProjectState, ProviderState, Storage};
 
@@ -33,6 +36,7 @@ pub struct AgentService {
     consent_counter: u64,
     session_counter: u64,
     mcp_counter: u64,
+    mcp_processes: RefCell<HashMap<String, Child>>,
 }
 
 impl AgentService {
@@ -74,8 +78,10 @@ impl AgentService {
             consent_counter: 0,
             session_counter: 0,
             mcp_counter: 0,
+            mcp_processes: RefCell::new(HashMap::new()),
         };
         svc.hydrate_counters();
+        let _ = svc.normalize_mcp_statuses_on_startup();
         svc
     }
 
@@ -566,6 +572,7 @@ impl ChatService for AgentService {
     }
 
     fn mcp_servers_list(&self) -> Result<Vec<McpServerRecord>, String> {
+        let _ = self.refresh_mcp_runtime_statuses();
         self.storage.read_mcp_servers().map_err(Self::io_err)
     }
 
@@ -590,6 +597,7 @@ impl ChatService for AgentService {
         &mut self,
         params: McpServerRemoveRequest,
     ) -> Result<McpServerMutationResponse, String> {
+        let _ = self.mcp_stop_server_process(&params.server_id);
         let mut items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
         let mut removed = None;
         items.retain(|s| {
@@ -608,10 +616,18 @@ impl ChatService for AgentService {
     }
 
     fn mcp_servers_start(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String> {
+        let items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let record = items
+            .iter()
+            .find(|s| s.id == params.server_id)
+            .cloned()
+            .ok_or_else(|| "mcp server not found".to_string())?;
+        self.mcp_spawn_server_process(&record.id, &record.command, &record.args)?;
         self.set_mcp_server_status(&params.server_id, "running")
     }
 
     fn mcp_servers_stop(&mut self, params: McpServerStateRequest) -> Result<McpServerMutationResponse, String> {
+        self.mcp_stop_server_process(&params.server_id)?;
         self.set_mcp_server_status(&params.server_id, "stopped")
     }
 
@@ -744,6 +760,106 @@ impl AgentService {
             server: updated,
         })
     }
+
+    fn mcp_spawn_server_process(
+        &mut self,
+        server_id: &str,
+        command: &str,
+        args: &[String],
+    ) -> Result<(), String> {
+        let mut processes = self.mcp_processes.borrow_mut();
+        if let Some(child) = processes.get_mut(server_id) {
+            match child.try_wait().map_err(Self::io_err)? {
+                None => return Ok(()),
+                Some(_) => {
+                    let _ = processes.remove(server_id);
+                }
+            }
+        }
+
+        let child = Command::new(command)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(Self::io_err)?;
+        processes.insert(server_id.to_string(), child);
+        Ok(())
+    }
+
+    fn mcp_stop_server_process(&mut self, server_id: &str) -> Result<(), String> {
+        let Some(mut child) = self.mcp_processes.borrow_mut().remove(server_id) else {
+            return Ok(());
+        };
+
+        if child.try_wait().map_err(Self::io_err)?.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(())
+    }
+
+    fn normalize_mcp_statuses_on_startup(&self) -> Result<(), String> {
+        let mut items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let mut changed = false;
+        for item in &mut items {
+            if item.status == "running" {
+                item.status = "stopped".to_string();
+                changed = true;
+            }
+        }
+        if changed {
+            self.storage.write_mcp_servers(&items).map_err(Self::io_err)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_mcp_runtime_statuses(&self) -> Result<(), String> {
+        let mut exited_ids = Vec::new();
+        {
+            let mut processes = self.mcp_processes.borrow_mut();
+            for (server_id, child) in processes.iter_mut() {
+                if child.try_wait().map_err(Self::io_err)?.is_some() {
+                    exited_ids.push(server_id.clone());
+                }
+            }
+            for server_id in &exited_ids {
+                let _ = processes.remove(server_id);
+            }
+        }
+
+        if exited_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut items = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let mut changed = false;
+        for item in &mut items {
+            if exited_ids.iter().any(|id| id == &item.id) && item.status == "running" {
+                item.status = "stopped".to_string();
+                changed = true;
+            }
+        }
+        if changed {
+            self.storage.write_mcp_servers(&items).map_err(Self::io_err)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AgentService {
+    fn drop(&mut self) {
+        let ids = self
+            .mcp_processes
+            .borrow()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.mcp_stop_server_process(&id);
+        }
+    }
 }
 
 fn provider_config_has_auth(provider_name: &str, config_json: &str) -> bool {
@@ -821,8 +937,15 @@ fn build_consent_request(
 mod tests {
     use super::*;
     use ipc::jsonrpc::{Id, Request};
-    use ipc::{AuditListRequest, JsonRpcServer, ProjectOpenRequest};
+    use ipc::{
+        AuditListRequest, JsonRpcServer, McpServerAddRequest, McpServerStateRequest,
+        ProjectOpenRequest,
+    };
     use std::fs;
+    #[cfg(unix)]
+    use std::thread;
+    #[cfg(unix)]
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -1078,5 +1201,93 @@ mod tests {
         assert_eq!(stored.messages[0].content, "hello");
         assert_eq!(stored.messages[1].role, "assistant");
         assert_eq!(stored.messages[1].content, response.final_text);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_server_start_stop_spawns_process_and_updates_status() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "sleepy".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "sleep 30".to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        let started = service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+        assert!(started.ok);
+        assert_eq!(started.server.as_ref().map(|s| s.status.as_str()), Some("running"));
+
+        let stopped = service
+            .mcp_servers_stop(McpServerStateRequest {
+                server_id: server.id,
+            })
+            .expect("stop server");
+        assert!(stopped.ok);
+        assert_eq!(stopped.server.as_ref().map(|s| s.status.as_str()), Some("stopped"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_servers_list_marks_exited_processes_stopped() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "short-lived".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "sleep 0.1".to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+
+        thread::sleep(Duration::from_millis(250));
+
+        let listed = service.mcp_servers_list().expect("list servers");
+        let record = listed
+            .iter()
+            .find(|s| s.id == server.id)
+            .expect("server in list");
+        assert_eq!(record.status, "stopped");
+    }
+
+    #[test]
+    fn startup_normalizes_persisted_running_mcp_statuses() {
+        let dir = tempdir().expect("tempdir");
+        {
+            let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+            let added = service
+                .mcp_servers_add(McpServerAddRequest {
+                    name: "persisted".to_string(),
+                    command: "echo".to_string(),
+                    args: vec!["hi".to_string()],
+                })
+                .expect("add mcp server");
+            let id = added.server.expect("server").id;
+            let mut items = service.storage.read_mcp_servers().expect("read mcp");
+            let item = items.iter_mut().find(|s| s.id == id).expect("server exists");
+            item.status = "running".to_string();
+            service.storage.write_mcp_servers(&items).expect("write mcp");
+        }
+
+        let service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let listed = service.mcp_servers_list().expect("list servers");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].status, "stopped");
     }
 }
