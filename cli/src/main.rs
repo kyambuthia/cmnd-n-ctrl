@@ -51,7 +51,7 @@ fn print_help() {
     println!("  cli session new|list|open|rm|append ...");
     println!("  cli auth login|list|logout ...");
     println!("  cli providers list|set|config-get|config-set ...");
-    println!("  cli mcp servers list|add|rm|start|stop|probe|tools ...");
+    println!("  cli mcp servers list|add|rm|start|stop|probe|tools|call ...");
     println!("  cli project open|status ...");
     println!("  cli audit list|show ...");
     println!("  cli doctor [--json] [--strict] [--addr <host:port>]");
@@ -690,7 +690,7 @@ fn handle_mcp_command(client: &mut JsonRpcClient<AgentService>, args: &[String])
     let addr = parse_addr_flag(args);
     let pos = positional_without_flags(args);
     if pos.len() < 2 || pos[0] != "servers" {
-        eprintln!("usage: cli mcp servers list|add|rm|start|stop|probe|tools ...");
+        eprintln!("usage: cli mcp servers list|add|rm|start|stop|probe|tools|call ...");
         std::process::exit(2);
     }
     let (method, params) = match pos[1].as_str() {
@@ -711,8 +711,16 @@ fn handle_mcp_command(client: &mut JsonRpcClient<AgentService>, args: &[String])
         "stop" if pos.len() >= 3 => ("mcp.servers.stop", json!({ "server_id": pos[2] })),
         "probe" if pos.len() >= 3 => ("mcp.servers.probe", json!({ "server_id": pos[2] })),
         "tools" if pos.len() >= 3 => ("mcp.servers.tools", json!({ "server_id": pos[2] })),
+        "call" if pos.len() >= 4 => (
+            "mcp.servers.call",
+            json!({
+                "server_id": pos[2],
+                "method": pos[3],
+                "params_json": string_flag(args, "--params").unwrap_or_else(|| "{}".to_string())
+            }),
+        ),
         _ => {
-            eprintln!("usage: cli mcp servers list|add --name N --command CMD [--args \"...\"]|rm <id>|start <id>|stop <id>|probe <id>|tools <id>");
+            eprintln!("usage: cli mcp servers list|add --name N --command CMD [--args \"...\"]|rm <id>|start <id>|stop <id>|probe <id>|tools <id>|call <id> <method> [--params JSON]");
             std::process::exit(2);
         }
     };

@@ -6,10 +6,10 @@ use actions::traits::StubActionBackend;
 use ipc::{
     ActionEvent, AuditEntry, AuditGetRequest, AuditListRequest, ChatApproveRequest, ChatDenyRequest,
     ChatRequest, ChatResponse, ChatService, ConsentActionRequest, ConsentListRequest, ConsentRequest,
-    McpServerAddRequest, McpServerMutationResponse, McpServerRecord, McpServerRemoveRequest,
-    McpServerProbeResponse, McpServerStateRequest, McpServerToolsResponse, PendingConsentRecord,
-    ProjectOpenRequest, ProjectOpenResponse, ProjectStatusRequest, ProjectStatusResponse,
-    ProviderConfigGetRequest, ProviderConfigRecord,
+    McpServerAddRequest, McpServerCallRequest, McpServerCallResponse, McpServerMutationResponse,
+    McpServerRecord, McpServerRemoveRequest, McpServerProbeResponse, McpServerStateRequest,
+    McpServerToolsResponse, PendingConsentRecord, ProjectOpenRequest, ProjectOpenResponse,
+    ProjectStatusRequest, ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
     ProviderConfigSetRequest, ProviderConfigSetResponse, ProviderInfo, ProvidersSetRequest, Session,
     SessionCreateRequest, SessionDeleteRequest, SessionDeleteResponse, SessionGetRequest,
     SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, SystemHealthResponse,
@@ -785,6 +785,25 @@ impl ChatService for AgentService {
                 server_id: params.server_id,
                 ok: false,
                 tools: Vec::new(),
+                error: Some(err),
+            }),
+        }
+    }
+
+    fn mcp_servers_call(&self, params: McpServerCallRequest) -> Result<McpServerCallResponse, String> {
+        match self.mcp_request(&params.server_id, &params.method, &params.params_json) {
+            Ok(result_json) => Ok(McpServerCallResponse {
+                server_id: params.server_id,
+                method: params.method,
+                ok: true,
+                result_json: Some(result_json),
+                error: None,
+            }),
+            Err(err) => Ok(McpServerCallResponse {
+                server_id: params.server_id,
+                method: params.method,
+                ok: false,
+                result_json: None,
                 error: Some(err),
             }),
         }
@@ -1753,6 +1772,50 @@ sleep 1"#;
         assert_eq!(listed.tools[0].name, "browser.open");
         assert_eq!(listed.tools[0].description, "Open a page");
         assert!(listed.tools[0].input_json_schema.contains("\"url\""));
+
+        let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_servers_call_routes_arbitrary_method_over_stdio() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let script = r#"p1='{"jsonrpc":"2.0","id":1,"result":{"server":"stub"}}'
+p2='{"jsonrpc":"2.0","id":2,"result":{"pong":true,"method":"ping"}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#p1}" "$p1"
+printf 'Content-Length: %s\r\n\r\n%s' "${#p2}" "$p2"
+sleep 1"#;
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "caller".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+
+        let response = service
+            .mcp_servers_call(McpServerCallRequest {
+                server_id: server.id.clone(),
+                method: "ping".to_string(),
+                params_json: "{}".to_string(),
+            })
+            .expect("call mcp server");
+        assert!(response.ok);
+        assert_eq!(response.method, "ping");
+        assert!(response
+            .result_json
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"pong\":true"));
 
         let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
     }
