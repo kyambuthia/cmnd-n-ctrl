@@ -152,6 +152,36 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         }
     }
 
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:append") {
+        if has_tool(tools, "file.append_text") {
+            let (path, content) = rest
+                .split_once("::")
+                .map(|(a, b)| (a.trim(), b.trim()))
+                .unwrap_or(("notes/generated.txt", rest.trim()));
+            return Some(ToolCall {
+                name: "file.append_text".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "notes/generated.txt" } else { path },
+                    "content": if content.is_empty() { "stub append" } else { content }
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:mkdir") {
+        if has_tool(tools, "file.mkdir") {
+            let path = rest.trim();
+            return Some(ToolCall {
+                name: "file.mkdir".to_string(),
+                arguments_json: json!({
+                    "path": if path.is_empty() { "notes" } else { path }
+                })
+                .to_string(),
+            });
+        }
+    }
+
     if prompt.to_ascii_lowercase().contains("tool:apps") && has_tool(tools, "desktop.app.list") {
         return Some(ToolCall {
             name: "desktop.app.list".to_string(),

@@ -41,7 +41,10 @@ impl Policy {
         if tool_call.name == "desktop.app.list" {
             return CapabilityTier::LocalActions;
         }
-        if tool_call.name == "file.write_text" {
+        if matches!(
+            tool_call.name.as_str(),
+            "file.write_text" | "file.append_text" | "file.mkdir"
+        ) {
             return CapabilityTier::LocalActions;
         }
         if tool_call.name.starts_with("time.")
@@ -135,6 +138,25 @@ mod tests {
             },
         );
         assert!(matches!(result, Authorization::RequireConfirmation { .. }));
+    }
+
+    #[test]
+    fn file_append_and_mkdir_require_confirmation() {
+        let policy = Policy::default();
+        for name in ["file.append_text", "file.mkdir"] {
+            assert!(matches!(
+                policy.capability_tier(&call(name)),
+                CapabilityTier::LocalActions
+            ));
+            let result = policy.authorize(
+                &call(name),
+                &PolicyContext {
+                    mode: ChatMode::BestEffort,
+                    user_confirmed: false,
+                },
+            );
+            assert!(matches!(result, Authorization::RequireConfirmation { .. }));
+        }
     }
 
     #[test]

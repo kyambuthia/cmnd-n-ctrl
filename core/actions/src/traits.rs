@@ -514,6 +514,106 @@ impl ActionBackend for StubActionBackend {
             };
         }
 
+        if tool_call.name == "file.append_text" {
+            let requested = args.get("path").and_then(Value::as_str);
+            let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+            let path = match self.scoped_path(requested) {
+                Ok(p) => p,
+                Err(err) => {
+                    return tool_error(
+                        &tool_call.name,
+                        self.platform,
+                        err,
+                        "file.append_text",
+                        self.project_root_display(),
+                    )
+                }
+            };
+            if let Some(parent) = path.parent() {
+                if let Err(err) = fs::create_dir_all(parent) {
+                    return tool_error(
+                        &tool_call.name,
+                        self.platform,
+                        format!("mkdir_failed:{err}"),
+                        "file.append_text",
+                        path.display().to_string(),
+                    );
+                }
+            }
+            let mut existing = if path.exists() {
+                fs::read_to_string(&path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            existing.push_str(content);
+            if let Err(err) = fs::write(&path, &existing) {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    format!("append_failed:{err}"),
+                    "file.append_text",
+                    path.display().to_string(),
+                );
+            }
+            return ToolResult {
+                name: tool_call.name.clone(),
+                result_json: json!({
+                    "status": "ok",
+                    "platform": self.platform,
+                    "project_root": self.project_root_display(),
+                    "path": path.display().to_string(),
+                    "bytes_appended": content.len(),
+                    "bytes_total": existing.len(),
+                    "note": "file appended under project scope"
+                })
+                .to_string(),
+                evidence: crate::evidence::action_evidence(
+                    format!("Appended text file {} ({} bytes)", path.display(), content.len()),
+                    format!("stub://{}/file.append_text", self.platform),
+                ),
+            };
+        }
+
+        if tool_call.name == "file.mkdir" {
+            let requested = args.get("path").and_then(Value::as_str);
+            let path = match self.scoped_path(requested) {
+                Ok(p) => p,
+                Err(err) => {
+                    return tool_error(
+                        &tool_call.name,
+                        self.platform,
+                        err,
+                        "file.mkdir",
+                        self.project_root_display(),
+                    )
+                }
+            };
+            if let Err(err) = fs::create_dir_all(&path) {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    format!("mkdir_failed:{err}"),
+                    "file.mkdir",
+                    path.display().to_string(),
+                );
+            }
+            return ToolResult {
+                name: tool_call.name.clone(),
+                result_json: json!({
+                    "status": "ok",
+                    "platform": self.platform,
+                    "project_root": self.project_root_display(),
+                    "path": path.display().to_string(),
+                    "note": "directory created under project scope"
+                })
+                .to_string(),
+                evidence: crate::evidence::action_evidence(
+                    format!("Created directory {}", path.display()),
+                    format!("stub://{}/file.mkdir", self.platform),
+                ),
+            };
+        }
+
         if tool_call.name == "desktop.open_url" {
             let url = args.get("url").and_then(Value::as_str).unwrap_or("about:blank");
             return ToolResult {

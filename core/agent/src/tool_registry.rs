@@ -65,6 +65,16 @@ impl ToolRegistry {
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}".to_string(),
                 },
                 Tool {
+                    name: "file.append_text".to_string(),
+                    description: "Append text to a file under the current project root (consent required)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}".to_string(),
+                },
+                Tool {
+                    name: "file.mkdir".to_string(),
+                    description: "Create a directory under the current project root (consent required)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}".to_string(),
+                },
+                Tool {
                     name: "desktop.open_url".to_string(),
                     description: "Open a URL using the platform shell (stubbed)".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}".to_string(),
