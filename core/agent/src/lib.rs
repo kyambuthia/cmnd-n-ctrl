@@ -11,7 +11,8 @@ use ipc::{
     ProjectStatusRequest, ProjectStatusResponse, ProviderConfigGetRequest, ProviderConfigRecord,
     ProviderConfigSetRequest, ProviderConfigSetResponse, ProviderInfo, ProvidersSetRequest, Session,
     SessionCreateRequest, SessionDeleteRequest, SessionDeleteResponse, SessionGetRequest,
-    SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, Tool,
+    SessionMessagesAppendRequest, SessionMessagesAppendResponse, SessionSummary, SystemHealthResponse,
+    Tool,
 };
 use providers::ProviderChoice;
 use std::cell::RefCell;
@@ -748,6 +749,28 @@ impl ChatService for AgentService {
     fn tools_list(&self) -> Vec<Tool> {
         self.tool_registry.list()
     }
+
+    fn system_health(&self) -> Result<SystemHealthResponse, String> {
+        let provider_state = self.provider_state().unwrap_or_default();
+        let pending_consents = self
+            .storage
+            .read_pending_consents()
+            .map_err(Self::io_err)?
+            .len();
+        let mcp_servers = self.storage.read_mcp_servers().map_err(Self::io_err)?;
+        let project = self.storage.read_project_state().map_err(Self::io_err)?;
+        let mcp_servers_running = mcp_servers.iter().filter(|s| s.status == "running").count();
+
+        Ok(SystemHealthResponse {
+            ok: true,
+            active_provider: provider_state.active_provider,
+            provider_count: provider_state.configs.len(),
+            pending_consents,
+            mcp_servers_total: mcp_servers.len(),
+            mcp_servers_running,
+            project_path: project.open_path,
+        })
+    }
 }
 
 impl AgentService {
@@ -1347,5 +1370,30 @@ mod tests {
         let openai = providers.iter().find(|p| p.name == "openai").expect("openai provider");
         assert!(openai.has_auth);
         assert_eq!(openai.config_summary, "configured (env)");
+    }
+
+    #[test]
+    fn system_health_reports_basic_runtime_state() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let _ = service.providers_config_set(ProviderConfigSetRequest {
+            provider_name: "openai".to_string(),
+            config_json: r#"{"api_key_env":"OPENAI_API_KEY"}"#.to_string(),
+        });
+        let _ = service.providers_set(ProvidersSetRequest {
+            provider_name: "openai".to_string(),
+        });
+        let _ = service.project_open(ProjectOpenRequest {
+            path: dir.path().display().to_string(),
+        });
+
+        let health = service.system_health().expect("system health");
+        assert!(health.ok);
+        assert_eq!(health.active_provider.as_deref(), Some("openai"));
+        assert_eq!(health.provider_count, 1);
+        assert_eq!(health.mcp_servers_total, 0);
+        assert_eq!(health.mcp_servers_running, 0);
+        assert_eq!(health.pending_consents, 0);
+        assert!(health.project_path.is_some());
     }
 }

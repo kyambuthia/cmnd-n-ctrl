@@ -54,6 +54,7 @@ fn print_help() {
     println!("  cli mcp servers list|add|rm|start|stop ...");
     println!("  cli project open|status ...");
     println!("  cli audit list|show ...");
+    println!("  cli doctor [--json] [--addr <host:port>]");
     println!("  cli tui   # interactive terminal UI (ratatui)");
     println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
@@ -226,6 +227,9 @@ fn main() {
         }
         "audit" => {
             handle_audit_command(&mut client, &args[1..]);
+        }
+        "doctor" => {
+            handle_doctor_command(&mut client, &args[1..]);
         }
         "tui" => {
             if let Err(err) = tui::run(&mut client) {
@@ -766,6 +770,52 @@ fn handle_audit_command(client: &mut JsonRpcClient<AgentService>, args: &[String
         std::process::exit(1);
     });
     print_value(&result, json_output);
+}
+
+fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[String]) {
+    let json_output = has_flag(args, "--json");
+    let addr = parse_addr_flag(args);
+    let result = backend_call_value(client, addr.as_deref(), "system.health", json!({}))
+        .unwrap_or_else(|err| {
+            eprintln!("doctor error: {err}");
+            std::process::exit(1);
+        });
+
+    if json_output {
+        print_value(&result, true);
+        return;
+    }
+
+    println!("backend: ok");
+    if let Some(obj) = result.as_object() {
+        println!(
+            "active_provider: {}",
+            obj.get("active_provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(none)")
+        );
+        println!(
+            "provider_configs: {}",
+            obj.get("provider_count").and_then(|v| v.as_u64()).unwrap_or(0)
+        );
+        println!(
+            "pending_consents: {}",
+            obj.get("pending_consents").and_then(|v| v.as_u64()).unwrap_or(0)
+        );
+        println!(
+            "mcp_servers: {} total / {} running",
+            obj.get("mcp_servers_total").and_then(|v| v.as_u64()).unwrap_or(0),
+            obj.get("mcp_servers_running").and_then(|v| v.as_u64()).unwrap_or(0)
+        );
+        println!(
+            "project: {}",
+            obj.get("project_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(not set)")
+        );
+    } else {
+        print_value(&result, false);
+    }
 }
 
 fn wire_result<T>(wire: WireResponse) -> Result<T, String>

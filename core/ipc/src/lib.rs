@@ -237,6 +237,17 @@ pub struct AuditGetRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemHealthResponse {
+    pub ok: bool,
+    pub active_provider: Option<String>,
+    pub provider_count: usize,
+    pub pending_consents: usize,
+    pub mcp_servers_total: usize,
+    pub mcp_servers_running: usize,
+    pub project_path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingConsentRecord {
     pub consent_id: String,
     pub session_id: Option<String>,
@@ -341,6 +352,7 @@ pub trait ChatService {
     fn consent_approve(&mut self, params: ConsentActionRequest) -> Result<ChatResponse, String>;
     fn consent_deny(&mut self, params: ConsentActionRequest) -> Result<ChatResponse, String>;
     fn tools_list(&self) -> Vec<Tool>;
+    fn system_health(&self) -> Result<SystemHealthResponse, String>;
 }
 
 pub struct JsonRpcServer<S> {
@@ -423,6 +435,7 @@ where
                 self.parse_and_call(&request, |s, p: ConsentActionRequest| s.consent_approve(p))
             }
             "consent.deny" => self.parse_and_call(&request, |s, p: ConsentActionRequest| s.consent_deny(p)),
+            "system.health" => self.parse_and_call(&request, |s, _p: EmptyParams| s.system_health()),
             "rpc.raw" => {
                 match serde_json::from_str::<RawRpcRequest>(&request.params_json) {
                     Ok(inner) => self.handle(Request::new(
