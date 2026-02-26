@@ -245,6 +245,7 @@ pub struct SystemHealthResponse {
     pub mcp_servers_total: usize,
     pub mcp_servers_running: usize,
     pub project_path: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

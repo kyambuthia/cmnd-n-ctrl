@@ -788,6 +788,11 @@ fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[Strin
 
     println!("backend: ok");
     if let Some(obj) = result.as_object() {
+        if let Some(ok) = obj.get("ok").and_then(|v| v.as_bool()) {
+            if !ok {
+                println!("status: warnings present");
+            }
+        }
         println!(
             "active_provider: {}",
             obj.get("active_provider")
@@ -813,6 +818,16 @@ fn handle_doctor_command(client: &mut JsonRpcClient<AgentService>, args: &[Strin
                 .and_then(|v| v.as_str())
                 .unwrap_or("(not set)")
         );
+        if let Some(warnings) = obj.get("warnings").and_then(|v| v.as_array()) {
+            if !warnings.is_empty() {
+                println!("warnings:");
+                for warning in warnings {
+                    if let Some(text) = warning.as_str() {
+                        println!("  - {text}");
+                    }
+                }
+            }
+        }
     } else {
         print_value(&result, false);
     }

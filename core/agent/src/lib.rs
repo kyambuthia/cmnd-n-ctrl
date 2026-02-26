@@ -759,18 +759,21 @@ impl ChatService for AgentService {
             .read_pending_consents()
             .map_err(Self::io_err)?
             .len();
+        let _ = self.refresh_mcp_runtime_statuses();
         let mcp_servers = self.storage.read_mcp_servers().map_err(Self::io_err)?;
         let project = self.storage.read_project_state().map_err(Self::io_err)?;
         let mcp_servers_running = mcp_servers.iter().filter(|s| s.status == "running").count();
+        let warnings = build_system_health_warnings(&provider_state, &project, &mcp_servers);
 
         Ok(SystemHealthResponse {
-            ok: true,
+            ok: warnings.is_empty(),
             active_provider: provider_state.active_provider,
             provider_count: provider_state.configs.len(),
             pending_consents,
             mcp_servers_total: mcp_servers.len(),
             mcp_servers_running,
             project_path: project.open_path,
+            warnings,
         })
     }
 }
@@ -961,6 +964,62 @@ fn redact_provider_config_json(config_json: &str) -> String {
         }
     }
     serde_json::to_string(&parsed).unwrap_or_else(|_| config_json.to_string())
+}
+
+fn build_system_health_warnings(
+    provider_state: &ProviderState,
+    project: &ProjectState,
+    mcp_servers: &[McpServerRecord],
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if let Some(active) = provider_state.active_provider.as_deref() {
+        let cfg = provider_state
+            .configs
+            .get(active)
+            .cloned()
+            .unwrap_or_else(|| "{}".to_string());
+        if !provider_config_has_auth(active, &cfg) {
+            warnings.push(format!("active provider '{}' has no configured auth", active));
+        }
+        if let Some(env_name) = provider_config_env_ref(&cfg) {
+            if env::var(&env_name).map(|v| v.trim().is_empty()).unwrap_or(true) {
+                warnings.push(format!(
+                    "provider auth env var '{}' is not set or empty",
+                    env_name
+                ));
+            }
+        }
+    } else {
+        warnings.push("no active provider selected".to_string());
+    }
+
+    if let Some(path) = project.open_path.as_deref() {
+        let p = Path::new(path);
+        if !p.exists() {
+            warnings.push(format!("project path does not exist: {}", path));
+        } else if !p.is_dir() {
+            warnings.push(format!("project path is not a directory: {}", path));
+        }
+    }
+
+    if mcp_servers.iter().any(|s| s.status == "running") {
+        warnings.push("MCP servers marked running are in-process only and will stop on service restart".to_string());
+    }
+
+    warnings
+}
+
+fn provider_config_env_ref(config_json: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(config_json).ok()?;
+    for key in ["api_key_env", "token_env"] {
+        if let Some(name) = parsed.get(key).and_then(|v| v.as_str()) {
+            if !name.trim().is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn build_consent_request(
@@ -1419,7 +1478,7 @@ mod tests {
         let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
         let _ = service.providers_config_set(ProviderConfigSetRequest {
             provider_name: "openai".to_string(),
-            config_json: r#"{"api_key_env":"OPENAI_API_KEY"}"#.to_string(),
+            config_json: r#"{"api_key":"test-key"}"#.to_string(),
         });
         let _ = service.providers_set(ProvidersSetRequest {
             provider_name: "openai".to_string(),
@@ -1436,5 +1495,30 @@ mod tests {
         assert_eq!(health.mcp_servers_running, 0);
         assert_eq!(health.pending_consents, 0);
         assert!(health.project_path.is_some());
+        assert!(health.warnings.is_empty());
+    }
+
+    #[test]
+    fn system_health_warns_when_provider_env_ref_missing() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        service
+            .providers_config_set(ProviderConfigSetRequest {
+                provider_name: "openai".to_string(),
+                config_json: r#"{"api_key_env":"CMND_N_CTRL_TEST_MISSING_KEY"}"#.to_string(),
+            })
+            .expect("config set");
+        service
+            .providers_set(ProvidersSetRequest {
+                provider_name: "openai".to_string(),
+            })
+            .expect("provider set");
+
+        let health = service.system_health().expect("system health");
+        assert!(!health.ok);
+        assert!(health
+            .warnings
+            .iter()
+            .any(|w| w.contains("CMND_N_CTRL_TEST_MISSING_KEY")));
     }
 }
