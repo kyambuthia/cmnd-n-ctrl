@@ -1299,8 +1299,41 @@ fn build_system_health_warnings(
     if mcp_servers.iter().any(|s| s.status == "running") {
         warnings.push("MCP servers marked running are in-process only and will stop on service restart".to_string());
     }
+    for server in mcp_servers {
+        if !command_looks_available(&server.command) {
+            warnings.push(format!(
+                "configured MCP server '{}' ({}) command not found: {}",
+                server.name, server.id, server.command
+            ));
+        }
+    }
 
     warnings
+}
+
+fn command_looks_available(command: &str) -> bool {
+    if command.trim().is_empty() {
+        return false;
+    }
+    let path = Path::new(command);
+    if path.components().count() > 1 || command.contains(std::path::MAIN_SEPARATOR) {
+        return path.exists();
+    }
+    let Some(paths) = env::var_os("PATH") else {
+        return false;
+    };
+    for dir in env::split_paths(&paths) {
+        if dir.join(command).exists() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            if dir.join(format!("{command}.exe")).exists() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn provider_config_env_ref(config_json: &str) -> Option<String> {
@@ -2075,5 +2108,26 @@ sleep 1"#;
             .warnings
             .iter()
             .any(|w| w.contains("did not respond to initialize")));
+    }
+
+    #[test]
+    fn system_health_warns_when_mcp_command_is_missing() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "missing".to_string(),
+                command: "cmnd-n-ctrl-definitely-missing-bin".to_string(),
+                args: vec![],
+            })
+            .expect("add mcp");
+        let _ = added.server.expect("server");
+
+        let health = service.system_health().expect("health");
+        assert!(!health.ok);
+        assert!(health
+            .warnings
+            .iter()
+            .any(|w| w.contains("command not found")));
     }
 }
