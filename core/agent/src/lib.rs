@@ -16,6 +16,7 @@ use ipc::{
 };
 use providers::ProviderChoice;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
@@ -513,17 +514,27 @@ impl ChatService for AgentService {
 
     fn providers_list(&self) -> Result<Vec<ProviderInfo>, String> {
         let state = self.provider_state().unwrap_or_default();
-        let names = ["openai", "openai-stub", "anthropic-stub", "gemini-stub"];
+        let mut names = BTreeSet::<String>::new();
+        for name in ProviderChoice::builtin_names() {
+            names.insert((*name).to_string());
+        }
+        for name in state.configs.keys() {
+            names.insert(name.clone());
+        }
+        if let Some(active) = state.active_provider.as_ref() {
+            names.insert(active.clone());
+        }
+
         Ok(names
             .iter()
             .map(|name| {
-                let cfg = state.configs.get(*name).cloned().unwrap_or_else(|| "{}".to_string());
+                let cfg = state.configs.get(name).cloned().unwrap_or_else(|| "{}".to_string());
                 let has_auth = provider_config_has_auth(name, &cfg);
                 let auth_source = provider_config_auth_source(&cfg);
                 ProviderInfo {
-                    name: (*name).to_string(),
+                    name: name.clone(),
                     enabled: true,
-                    is_active: state.active_provider.as_deref() == Some(*name),
+                    is_active: state.active_provider.as_deref() == Some(name.as_str()),
                     has_auth,
                     config_summary: if has_auth {
                         match auth_source.as_deref() {
@@ -1480,6 +1491,34 @@ mod tests {
         let openai = providers.iter().find(|p| p.name == "openai").expect("openai provider");
         assert!(openai.has_auth);
         assert_eq!(openai.config_summary, "configured (env)");
+    }
+
+    #[test]
+    fn providers_list_includes_custom_provider_aliases() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        service
+            .providers_config_set(ProviderConfigSetRequest {
+                provider_name: "ollama-local".to_string(),
+                config_json: r#"{"api_key_env":"OLLAMA_TOKEN"}"#.to_string(),
+            })
+            .expect("set custom provider config");
+
+        let providers = service.providers_list().expect("providers list");
+        let custom = providers
+            .iter()
+            .find(|p| p.name == "ollama-local")
+            .expect("custom provider present");
+        assert!(custom.has_auth);
+        assert_eq!(custom.config_summary, "configured (env)");
+
+        let active = service
+            .providers_set(ProvidersSetRequest {
+                provider_name: "ollama-local".to_string(),
+            })
+            .expect("set custom provider active");
+        assert_eq!(active.name, "ollama-local");
+        assert!(active.is_active);
     }
 
     #[test]

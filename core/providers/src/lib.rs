@@ -18,12 +18,17 @@ pub enum ProviderChoice {
 }
 
 impl ProviderChoice {
+    pub fn builtin_names() -> &'static [&'static str] {
+        &["openai", "openai-stub", "anthropic-stub", "gemini-stub"]
+    }
+
     pub fn by_name(name: &str) -> Self {
         match name {
             "openai" => Self::OpenAi(OpenAiHttpProvider),
             "anthropic" | "anthropic-stub" => Self::Anthropic(AnthropicStubProvider),
             "gemini" | "gemini-stub" => Self::Gemini(GeminiStubProvider),
-            _ => Self::OpenAiStub(OpenAiStubProvider),
+            "openai-stub" => Self::OpenAiStub(OpenAiStubProvider),
+            _ => Self::OpenAi(OpenAiHttpProvider),
         }
     }
 }
