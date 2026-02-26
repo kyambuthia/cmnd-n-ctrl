@@ -287,7 +287,8 @@ fn capability_tier_label(tier: &CapabilityTier) -> String {
 
 fn arguments_preview(arguments_json: &str) -> String {
     const MAX_CHARS: usize = 180;
-    let compact = arguments_json.replace('\n', " ").replace('\r', " ");
+    let sanitized = sanitize_arguments_preview(arguments_json);
+    let compact = sanitized.replace('\n', " ").replace('\r', " ");
     let mut chars = compact.chars();
     let preview: String = chars.by_ref().take(MAX_CHARS).collect();
     if chars.next().is_some() {
@@ -295,6 +296,41 @@ fn arguments_preview(arguments_json: &str) -> String {
     } else {
         preview
     }
+}
+
+fn sanitize_arguments_preview(arguments_json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(arguments_json) else {
+        return arguments_json.to_string();
+    };
+    redact_sensitive_json(&mut value);
+    serde_json::to_string(&value).unwrap_or_else(|_| arguments_json.to_string())
+}
+
+fn redact_sensitive_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                if is_sensitive_key(key) {
+                    *value = serde_json::Value::String("[REDACTED]".to_string());
+                } else {
+                    redact_sensitive_json(value);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "api_key" | "apikey" | "token" | "authorization" | "password" | "secret" | "content"
+    )
 }
 
 fn request_fingerprint(messages: &[ChatMessage], provider_config: &ProviderConfig, mode: &ChatMode) -> String {
@@ -391,5 +427,19 @@ mod tests {
         assert_eq!(response.executed_action_events.len(), 2);
         assert_eq!(response.executed_action_events[0].tool_name, "echo");
         assert_eq!(response.executed_action_events[1].tool_name, "math.add");
+    }
+
+    #[test]
+    fn arguments_preview_redacts_sensitive_fields() {
+        let preview = arguments_preview(
+            r#"{"path":"notes/out.txt","content":"super secret body","token":"abc123","nested":{"api_key":"k","safe":"ok"}}"#,
+        );
+        assert!(preview.contains("\"path\":\"notes/out.txt\""));
+        assert!(preview.contains("\"content\":\"[REDACTED]\""));
+        assert!(preview.contains("\"token\":\"[REDACTED]\""));
+        assert!(preview.contains("\"api_key\":\"[REDACTED]\""));
+        assert!(preview.contains("\"safe\":\"ok\""));
+        assert!(!preview.contains("super secret body"));
+        assert!(!preview.contains("abc123"));
     }
 }
