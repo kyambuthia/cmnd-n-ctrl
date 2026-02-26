@@ -4,7 +4,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ProviderState {
@@ -49,6 +52,9 @@ pub struct FileStorage {
 }
 
 impl FileStorage {
+    const LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+    const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
     pub fn new_default() -> io::Result<Self> {
         let proj = ProjectDirs::from("com", "cmnd-n-ctrl", "cmnd-n-ctrl")
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unable to resolve app data dir"))?;
@@ -86,6 +92,7 @@ impl FileStorage {
     where
         T: Serialize,
     {
+        let _lock = self.acquire_file_lock(file_name)?;
         let path = self.path_for(file_name);
         let tmp = path.with_extension("tmp");
         let payload = serde_json::to_string_pretty(value)
@@ -93,6 +100,40 @@ impl FileStorage {
         fs::write(&tmp, payload)?;
         fs::rename(tmp, path)?;
         Ok(())
+    }
+
+    fn acquire_file_lock(&self, file_name: &str) -> io::Result<FileLockGuard> {
+        let lock_path = self.path_for(&format!("{file_name}.lock"));
+        let start = Instant::now();
+        loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(_) => return Ok(FileLockGuard { path: lock_path }),
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                    if start.elapsed() >= Self::LOCK_WAIT_TIMEOUT {
+                        return Err(io::Error::new(
+                            ErrorKind::TimedOut,
+                            format!("timeout waiting for storage lock: {}", lock_path.display()),
+                        ));
+                    }
+                    thread::sleep(Self::LOCK_POLL_INTERVAL);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+struct FileLockGuard {
+    path: PathBuf,
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -150,6 +191,8 @@ impl Storage for FileStorage {
 mod tests {
     use super::*;
     use ipc::{ChatMessage, ChatMode, ProviderConfig};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::tempdir;
 
     #[test]
@@ -202,5 +245,39 @@ mod tests {
         let got = store.read_pending_consents().expect("read");
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].record.consent_id, item.record.consent_id);
+    }
+
+    #[test]
+    fn concurrent_writes_are_serialized_by_lock() {
+        let dir = tempdir().expect("tempdir");
+        let store = Arc::new(FileStorage::new_in_dir(dir.path()).expect("store"));
+        let barrier = Arc::new(Barrier::new(3));
+
+        let mut handles = Vec::new();
+        for i in 0..2 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for n in 0..50 {
+                    let session = Session {
+                        id: format!("sess-{i}-{n}"),
+                        created_at_unix_seconds: n,
+                        updated_at_unix_seconds: n,
+                        title: format!("T{i}"),
+                        messages: vec![],
+                    };
+                    store.write_sessions(&[session])?;
+                }
+                Ok::<(), io::Error>(())
+            }));
+        }
+
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("thread join").expect("thread write");
+        }
+
+        let _ = store.list_sessions().expect("read sessions after concurrent writes");
     }
 }
