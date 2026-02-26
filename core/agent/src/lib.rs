@@ -557,11 +557,13 @@ impl ChatService for AgentService {
         Ok(ProviderConfigRecord {
             provider_name: provider_name.clone(),
             is_active: state.active_provider.as_deref() == Some(provider_name.as_str()),
-            config_json: state
-                .configs
-                .get(&provider_name)
-                .cloned()
-                .unwrap_or_else(|| "{}".to_string()),
+            config_json: redact_provider_config_json(
+                &state
+                    .configs
+                    .get(&provider_name)
+                    .cloned()
+                    .unwrap_or_else(|| "{}".to_string()),
+            ),
         })
     }
 
@@ -941,6 +943,24 @@ fn provider_config_auth_source(config_json: &str) -> Option<String> {
         return Some("inline".to_string());
     }
     None
+}
+
+fn redact_provider_config_json(config_json: &str) -> String {
+    let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(config_json) else {
+        return config_json.to_string();
+    };
+    let Some(obj) = parsed.as_object_mut() else {
+        return config_json.to_string();
+    };
+    for key in ["api_key", "token", "password", "secret"] {
+        if obj.contains_key(key) {
+            obj.insert(
+                key.to_string(),
+                serde_json::Value::String("[REDACTED]".to_string()),
+            );
+        }
+    }
+    serde_json::to_string(&parsed).unwrap_or_else(|_| config_json.to_string())
 }
 
 fn build_consent_request(
@@ -1370,6 +1390,27 @@ mod tests {
         let openai = providers.iter().find(|p| p.name == "openai").expect("openai provider");
         assert!(openai.has_auth);
         assert_eq!(openai.config_summary, "configured (env)");
+    }
+
+    #[test]
+    fn providers_config_get_redacts_inline_secret_values() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        service
+            .providers_config_set(ProviderConfigSetRequest {
+                provider_name: "openai".to_string(),
+                config_json: r#"{"api_key":"sk-test","api_key_env":"OPENAI_API_KEY"}"#.to_string(),
+            })
+            .expect("set provider config");
+
+        let record = service
+            .providers_config_get(ProviderConfigGetRequest {
+                provider_name: Some("openai".to_string()),
+            })
+            .expect("config get");
+        assert!(record.config_json.contains("\"api_key\":\"[REDACTED]\""));
+        assert!(record.config_json.contains("\"api_key_env\":\"OPENAI_API_KEY\""));
+        assert!(!record.config_json.contains("sk-test"));
     }
 
     #[test]
