@@ -957,7 +957,22 @@ impl ChatService for AgentService {
         let mcp_servers = self.storage.read_mcp_servers().map_err(Self::io_err)?;
         let project = self.storage.read_project_state().map_err(Self::io_err)?;
         let mcp_servers_running = mcp_servers.iter().filter(|s| s.status == "running").count();
-        let warnings = build_system_health_warnings(&provider_state, &project, &mcp_servers);
+        let mut warnings = build_system_health_warnings(&provider_state, &project, &mcp_servers);
+        for server in mcp_servers.iter().filter(|s| s.status == "running") {
+            if let Err(err) = self.mcp_probe_initialize(&server.id) {
+                warnings.push(format!(
+                    "running MCP server '{}' ({}) did not respond to initialize: {}",
+                    server.name, server.id, err
+                ));
+                continue;
+            }
+            if let Err(err) = self.mcp_request(&server.id, "tools/list", "{}") {
+                warnings.push(format!(
+                    "running MCP server '{}' ({}) failed tools/list: {}",
+                    server.name, server.id, err
+                ));
+            }
+        }
 
         Ok(SystemHealthResponse {
             ok: warnings.is_empty(),
@@ -2033,5 +2048,32 @@ sleep 1"#;
             .warnings
             .iter()
             .any(|w| w.contains("CMND_N_CTRL_TEST_MISSING_KEY")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_health_warns_when_running_mcp_server_is_not_speaking_mcp() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "sleepy".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "sleep 1".to_string()],
+            })
+            .expect("add mcp");
+        let server = added.server.expect("server");
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id,
+            })
+            .expect("start");
+
+        let health = service.system_health().expect("health");
+        assert!(!health.ok);
+        assert!(health
+            .warnings
+            .iter()
+            .any(|w| w.contains("did not respond to initialize")));
     }
 }
