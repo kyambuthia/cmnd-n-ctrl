@@ -387,7 +387,7 @@ fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         format!("-> {}", app.chat_input)
     };
     let input = Paragraph::new(text)
-        .style(Style::default().bg(Color::Rgb(34, 44, 64)).fg(Color::White))
+        .style(Style::default().bg(Color::Rgb(52, 56, 64)).fg(Color::White))
         .block(focused_block(title, app.focus == FocusPane::Chat))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, area);
