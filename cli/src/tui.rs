@@ -264,9 +264,8 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
                 " "
             };
             let row = format!(
-                "{marker} [{}] {} {}",
-                entry.status,
-                entry.execution_id,
+                "{marker} [{}] {}",
+                compact_status(&entry.status),
                 entry
                     .user_prompt
                     .as_deref()
@@ -275,7 +274,11 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
             );
             lines.push(Line::from(row));
             if idx == app.selected_execution && app.show_execution_details {
+                lines.push(Line::from(format!("   exec_id> {}", entry.execution_id)));
                 lines.push(Line::from(format!("   assistant> {}", entry.assistant_text)));
+                if let Some(session_id) = &entry.session_id {
+                    lines.push(Line::from(format!("   session> {}", session_id)));
+                }
                 if let Some(consent) = &entry.consent_request {
                     lines.push(Line::from(format!("   consent?> {}", consent.human_summary)));
                 }
@@ -377,7 +380,12 @@ fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         app.provider_name,
         app.current_session_id().unwrap_or_else(|| "(none)".to_string())
     );
-    let input = Paragraph::new(app.chat_input.as_str())
+    let text = if app.chat_input.is_empty() {
+        "-> ".to_string()
+    } else {
+        format!("-> {}", app.chat_input)
+    };
+    let input = Paragraph::new(text)
         .style(Style::default().bg(Color::Rgb(34, 44, 64)).fg(Color::White))
         .block(focused_block(title, app.focus == FocusPane::Chat))
         .wrap(Wrap { trim: false });
@@ -623,6 +631,15 @@ fn truncate_inline(input: &str, max: usize) -> String {
         format!("{out}...")
     } else {
         out
+    }
+}
+
+fn compact_status(status: &str) -> &str {
+    match status {
+        "completed" => "done",
+        "denied" => "blocked",
+        "error" => "failed",
+        other => other,
     }
 }
 

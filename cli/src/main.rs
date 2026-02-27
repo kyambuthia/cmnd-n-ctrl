@@ -379,7 +379,7 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
     let stdin = io::stdin();
     let mut line = String::new();
     loop {
-        print!("you> ");
+        print!("\x1b[38;5;45m->\x1b[0m ");
         io::stdout().flush()?;
 
         line.clear();
@@ -1184,13 +1184,13 @@ fn print_chat_response(response: &ChatResponse, json_output: bool) {
 }
 
 fn print_feed_item(item: &ExecutionFeedItem, consent_token: Option<&str>) {
-    let short_id = truncate_inline(&item.execution_id, 12);
-    let session = item
-        .session_id
-        .as_deref()
-        .map(|s| truncate_inline(s, 12))
-        .unwrap_or_else(|| "-".to_string());
-    println!("system> [{}] exec={} session={}", item.status, short_id, session);
+    let status_label = match item.status.as_str() {
+        "completed" => "done",
+        "denied" => "blocked",
+        "error" => "failed",
+        other => other,
+    };
+    println!("system> {status_label}");
     if let Some(prompt) = &item.user_prompt {
         println!("you> {}", prompt);
     }

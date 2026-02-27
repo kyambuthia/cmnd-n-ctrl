@@ -253,6 +253,12 @@
         border-top: 1px solid var(--border);
         padding: 0.7rem;
         background: #101a2a;
+        box-shadow: inset 0 1px 0 rgba(78, 161, 255, 0.25);
+      }
+      .compose-arrow {
+        color: #7db7ff;
+        font-size: 0.88rem;
+        margin-bottom: 0.35rem;
       }
       textarea {
         width: 100%;
@@ -584,6 +590,7 @@
           </div>
           <div class="compose">
             <label class="section-title" for="prompt">Request</label>
+            <div class="compose-arrow">-> type your request</div>
             <textarea id="prompt" placeholder="Describe the task (for example: read a file, open a page, enter values, and submit)"></textarea>
             <div class="row">
               <button id="send" type="button">Send</button>
