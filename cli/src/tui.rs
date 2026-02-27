@@ -7,7 +7,7 @@ use ipc::{AuditEntry, ChatMessage, ChatMode, ChatRequest, ChatResponse, Executio
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::layout::Rect;
 use ratatui::{Frame, Terminal};
@@ -281,7 +281,10 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
                     .map(|p| truncate_inline(p, 56))
                     .unwrap_or_else(|| "(no prompt)".to_string())
             );
-            lines.push(Line::from(row));
+            lines.push(Line::from(vec![Span::styled(
+                row,
+                Style::default().bg(Color::Rgb(52, 56, 64)).fg(Color::White),
+            )]));
             if idx == app.selected_execution && app.show_execution_details {
                 lines.push(Line::from(format!("   assistant> {}", entry.assistant_text)));
                 if let Some(session_id) = &entry.session_id {
