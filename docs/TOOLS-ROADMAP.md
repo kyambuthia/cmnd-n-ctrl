@@ -10,6 +10,7 @@ It complements `docs/ROADMAP.md` by focusing specifically on callable tools, the
 - Read-only tools ship first to improve usefulness safely.
 - Mutating tools require stronger consent UX and clearer previews.
 - CLI and GUI should expose the same tool semantics (same RPC/tool names).
+- User-facing chat surfaces use natural language prompts (no explicit `tool:` syntax in CLI/TUI/REPL).
 
 ## Capability Tiers (Tool-Level)
 - `ReadOnly`
@@ -109,6 +110,11 @@ Design notes
 - Linux Wayland/X11 differences must be exposed in tool errors/evidence.
 - Windows integrity/UAC boundaries must be explicit in failure reasons.
 
+Current implementation status
+- `desktop.open_url`: best-effort real OS dispatch implemented.
+- `desktop.app.activate`: best-effort platform adapters implemented.
+- `desktop.app.list`: still stubbed (pending real process/window enumeration).
+
 ## Phase E: Project Engineering / Dev Productivity Tools
 Goal: improve software/operator workflows using the same consent/audit model.
 
@@ -140,10 +146,19 @@ Design notes
 - Plugin tools must declare capabilities and schemas up front.
 - MCP server lifecycle and provenance should be auditable.
 
-## Immediate Next Implementation Batch (Recommended)
-1. `file.read_json` (ReadOnly)
-2. `file.search_text` (ReadOnly, project-scoped)
-3. `file.stat` (ReadOnly)
-4. `file.write_text` (LocalActions, consent-gated)
+Current implementation status
+- MCP process lifecycle and stdio request path implemented.
+- Chat integration exists via:
+  - `mcp.tool_call`
+  - dynamic aliases: `mcp.server.<id>.<tool>`
+- Runtime RPC methods implemented:
+  - `mcp.servers.probe`
+  - `mcp.servers.tools`
+  - `mcp.servers.call`
+  - `mcp.servers.tool_call`
 
-These increase utility immediately for "read data / inspect repo / prepare outputs" workflows and fit the current architecture well.
+## Immediate Next Implementation Batch (Recommended)
+1. Browser plugin integration over MCP (Playwright-backed `browser.*` tools).
+2. Real `desktop.app.list` implementation and evidence model.
+3. Policy packs for per-tool/server allowlists.
+4. Tauri feed rendering parity using shared execution projection model.

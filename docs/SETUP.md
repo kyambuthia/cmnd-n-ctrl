@@ -2,11 +2,11 @@
 
 ## Build Artifacts (Important)
 
-This repo is configured to keep Cargo build artifacts out of the project directory.
+This repo is configured to use a repo-local Cargo target directory.
 
 - Default Cargo target dir is set in `.cargo/config.toml`
-- Artifacts are written outside the repo by default (on this machine: `/home/mbuthi/.cmnd-n-ctrl-target`)
-- This avoids creating `target/` folders in the repo during normal development
+- Artifacts are written to `./target`
+- `.gitignore` excludes `target/`
 
 ## Quickstart (Terminal)
 
@@ -14,12 +14,18 @@ This repo is configured to keep Cargo build artifacts out of the project directo
    - `cd core && cargo test -p agent -p ipc -p providers -p actions -p plugins`
 2. Verify CLI:
    - `cargo run -p cli -- --help`
-3. List tools:
+3. Start interactive CLI (TUI when available, REPL fallback otherwise):
+   - `cargo run -p cli --`
+4. List tools:
    - `cargo run -p cli -- tools`
-4. Try chat:
-   - `cargo run -p cli -- chat "hello"`
-   - `cargo run -p cli -- chat "please use tool:"`
-   - `cargo run -p cli -- chat "please use tool:" --require-confirmation`
+5. Try natural-language chat:
+   - `cargo run -p cli -- chat "Open https://example.com" --require-confirmation`
+   - `cargo run -p cli -- chat "List applications running" --require-confirmation`
+
+### Natural Language Rule
+- User-facing CLI/TUI/REPL chat enforces natural-language-only prompts.
+- Explicit `tool:` syntax is blocked in those surfaces.
+- Backend compatibility still supports legacy `tool:` parsing for non-UI callers/tests.
 
 ## One-Command Local Prototype Runner
 
@@ -45,16 +51,10 @@ For a single command:
 CARGO_TARGET_DIR=/tmp/cmnd-n-ctrl-target cargo run -p cli -- --help
 ```
 
-For your current shell session:
-
-```bash
-export CARGO_TARGET_DIR=/tmp/cmnd-n-ctrl-target
-```
-
 ## Desktop Tauri Backend Scaffold Check
 
 The Tauri backend is a scaffold and can be checked independently:
 
 - `cargo check --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml`
 
-The frontend UI is present, but end-to-end Tauri wiring to a running local JSON-RPC server is still a TODO in this scaffold.
+The frontend UI and local JSON-RPC bridge are present; production-hardening and full feature parity are still in progress.

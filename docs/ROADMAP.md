@@ -20,12 +20,15 @@ This roadmap is organized by delivery phases with explicit outcomes and "done" c
 ## Phase 0: Stabilize The Current Foundation (1-2 weeks)
 Goal: make existing features dependable and easier to operate.
 
-Scope
-- Finish Tauri dev/runtime path validation on Windows and Linux.
-- Make `cli` default to TUI (done) and improve help/discoverability (done).
-- Add consent token TTL / expiry and explicit replay errors.
-- Improve storage safety with file locking (not just atomic writes).
-- Add CI for `tauri-app` feature build on Windows + Linux.
+Current Status
+- Done:
+  - `cli` defaults to interactive mode with TUI + REPL fallback.
+  - Consent TTL/expiry/replay checks are implemented and tested.
+  - Storage write locking is implemented.
+  - MCP runtime lifecycle/status reconciliation implemented.
+  - `system.health`/`doctor` diagnostics include MCP runtime probes.
+- In progress:
+  - Full Tauri parity and release hardening.
 
 Done Criteria
 - `npm run tauri:dev` works on Windows and Linux developer machines.
@@ -35,8 +38,18 @@ Done Criteria
 ## Phase 1: Make Browser-Based Workflows Useful (Fastest Value) (2-4 weeks)
 Goal: supervised browser automation for real tasks (Google Sheets/forms/web apps) before deep desktop automation.
 
-Scope
-- Implement process plugin provider/tool server runtime (JSON-RPC over stdio, MCP-compatible framing).
+Current Status
+- Done:
+  - MCP stdio runtime request path exists (`probe`, `tools`, `call`, `tool_call`).
+  - MCP tool invocation is integrated into chat via:
+    - `mcp.tool_call`
+    - dynamic aliases `mcp.server.<id>.<tool>`
+  - OpenAI-compatible tool-call ID handling implemented.
+- Remaining:
+  - Real Playwright-backed browser MCP server integration.
+  - Browser-specific evidence and richer selector/URL previews.
+
+Planned Scope
 - Add Playwright-backed browser tool plugin (or equivalent local browser automation plugin):
   - `browser.open`
   - `browser.navigate`
@@ -80,7 +93,15 @@ Done Criteria
 ## Phase 3: Real Desktop App Automation (Windows + Linux) (4-8+ weeks)
 Goal: move from browser-only usefulness to desktop-app usefulness.
 
-Scope
+Current Status
+- Done:
+  - `desktop.open_url` best-effort real OS dispatchers.
+  - `desktop.app.activate` best-effort platform adapters.
+- Remaining:
+  - Real `desktop.app.list` implementation.
+  - Better window targeting and stronger evidence capture.
+
+Planned Scope
 - Implement non-stub Windows and Linux backends for:
   - `desktop.app.list`
   - `desktop.app.activate`
@@ -144,12 +165,14 @@ GUI Priorities (Tauri)
   - window state persistence
   - notifications for pending approvals (later)
 
-CLI Priorities (TUI)
-- Default TUI UX (done) + command discoverability
-- Better pane navigation and status indicators
-- Inline consent reasoning/details, not compact IDs only
-- Audit detail viewer and provider config editor
-- Optional REPL mode for users who prefer terminal chat over pane UI
+CLI Priorities (TUI/REPL)
+- Done:
+  - interactive fallback REPL when TUI unavailable
+  - natural-language-only chat UX in CLI/TUI/REPL
+  - feed-style rendering improvements in both REPL and TUI
+- In progress:
+  - deeper visual parity with desktop feed blocks
+  - searchable execution history
 
 Done Criteria
 - A new user can perform a supervised workflow without reading source code or raw JSON.
@@ -183,11 +206,11 @@ Done Criteria
 - Common workflows feel responsive and do not block the UI unnecessarily.
 
 ## Immediate Next 5 Milestones (Recommended)
-1. Consent TTL + replay/expiry tests and UI/CLI handling.
-2. Real file tools (`file.list`, `file.read_text`, `file.read_csv`) with project scoping.
-3. Playwright browser plugin over existing JSON-RPC/MCP framing.
-4. GUI session/history/approvals views redesign (less noisy, more task-focused).
-5. Windows + Linux CI job for `tauri-app` feature build.
+1. Playwright browser MCP server integration and end-to-end supervised workflow test.
+2. Real `desktop.app.list` implementation (Linux first, Windows next).
+3. Shared execution feed projection adoption in Tauri frontend render path.
+4. Keychain-backed provider secret storage.
+5. Windows + Linux CI job for `tauri-app` feature build and smoke tests.
 
 ## Definition of "Useful" (v1)
 The tool is "useful" when a user can reliably do the following in a supervised flow:
