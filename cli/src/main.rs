@@ -373,13 +373,12 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
     let mut require_confirmation = true;
     let mut session_id: Option<String> = None;
 
-    println!("cmnd-n-ctrl interactive shell");
-    println!("Type natural language prompts. Type '/help' for commands.");
+    print_repl_banner(&provider_name, require_confirmation, session_id.as_deref());
 
     let stdin = io::stdin();
     let mut line = String::new();
     loop {
-        print!("cnc> ");
+        print!("you> ");
         io::stdout().flush()?;
 
         line.clear();
@@ -395,25 +394,16 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
             break;
         }
         if input.eq_ignore_ascii_case("/help") {
-            println!("commands:");
-            println!("  /help");
-            println!("  /quit");
-            println!("  /provider <name>");
-            println!("  /mode confirm|best");
-            println!("  /session new|clear|show");
-            println!("  /consent list");
-            println!("  /consent approve <id>");
-            println!("  /consent deny <id>");
-            println!("  /tools");
+            print_repl_help();
             continue;
         }
         if let Some(rest) = input.strip_prefix("/provider ") {
             let next = rest.trim();
             if next.is_empty() {
-                println!("provider unchanged: {}", provider_name);
+                println!("system> provider unchanged: {}", provider_name);
             } else {
                 provider_name = next.to_string();
-                println!("provider: {}", provider_name);
+                println!("system> provider set to {}", provider_name);
             }
             continue;
         }
@@ -421,24 +411,24 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
             match rest.trim() {
                 "confirm" => {
                     require_confirmation = true;
-                    println!("mode: require confirmation");
+                    println!("system> mode set: confirm");
                 }
                 "best" => {
                     require_confirmation = false;
-                    println!("mode: best effort");
+                    println!("system> mode set: best");
                 }
-                _ => println!("usage: /mode confirm|best"),
+                _ => println!("system> usage: /mode confirm|best"),
             }
             continue;
         }
         if input.eq_ignore_ascii_case("/session clear") {
             session_id = None;
-            println!("session cleared");
+            println!("system> session cleared");
             continue;
         }
         if input.eq_ignore_ascii_case("/session show") {
             println!(
-                "session: {}",
+                "system> session: {}",
                 session_id.clone().unwrap_or_else(|| "(none)".to_string())
             );
             continue;
@@ -451,50 +441,53 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             println!(
-                "session: {}",
+                "system> session: {}",
                 session_id.clone().unwrap_or_else(|| "(unknown)".to_string())
             );
             continue;
         }
         if input.eq_ignore_ascii_case("/consent list") {
             let records: Value = local_rpc(client, "consent.list", json!({})).map_err(io::Error::other)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&records).unwrap_or_else(|_| "[]".to_string())
-            );
+            print_repl_consents(&records);
             continue;
         }
         if let Some(rest) = input.strip_prefix("/consent approve ") {
             let consent_id = rest.trim();
             if consent_id.is_empty() {
-                println!("usage: /consent approve <id>");
+                println!("system> usage: /consent approve <id>");
                 continue;
             }
             let response: ChatResponse = local_rpc(client, "consent.approve", json!({ "consent_id": consent_id }))
                 .map_err(io::Error::other)?;
-            print_chat_response(&response, false);
+            print_repl_chat_response(&response);
             continue;
         }
         if let Some(rest) = input.strip_prefix("/consent deny ") {
             let consent_id = rest.trim();
             if consent_id.is_empty() {
-                println!("usage: /consent deny <id>");
+                println!("system> usage: /consent deny <id>");
                 continue;
             }
             let response: ChatResponse = local_rpc(client, "consent.deny", json!({ "consent_id": consent_id }))
                 .map_err(io::Error::other)?;
-            print_chat_response(&response, false);
+            print_repl_chat_response(&response);
             continue;
         }
         if input.eq_ignore_ascii_case("/tools") {
+            println!("system> available tools:");
             for tool in client.tools_list() {
-                println!("{} - {}", tool.name, tool.description);
+                println!("  - {}: {}", tool.name, tool.description);
             }
             continue;
         }
 
         if contains_tool_syntax(input) {
-            println!("natural-language-only mode: avoid explicit 'tool:' syntax");
+            println!("system> natural-language-only mode: avoid explicit 'tool:' syntax");
+            continue;
+        }
+
+        if input.starts_with('/') {
+            println!("system> unknown command. Type /help");
             continue;
         }
 
@@ -516,10 +509,79 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
         if response.session_id.is_some() {
             session_id = response.session_id.clone();
         }
-        print_chat_response(&response, false);
+        print_repl_chat_response(&response);
     }
 
     Ok(())
+}
+
+fn print_repl_banner(provider_name: &str, require_confirmation: bool, session_id: Option<&str>) {
+    println!("cmnd-n-ctrl shell");
+    println!("natural language only");
+    println!(
+        "provider={} mode={} session={}",
+        provider_name,
+        if require_confirmation { "confirm" } else { "best" },
+        session_id.unwrap_or("(none)")
+    );
+    println!("type /help for commands");
+}
+
+fn print_repl_help() {
+    println!("system> commands");
+    println!("  /help");
+    println!("  /quit");
+    println!("  /provider <name>");
+    println!("  /mode confirm|best");
+    println!("  /session new|clear|show");
+    println!("  /consent list");
+    println!("  /consent approve <id>");
+    println!("  /consent deny <id>");
+    println!("  /tools");
+}
+
+fn print_repl_consents(records: &Value) {
+    let Some(items) = records.as_array() else {
+        println!(
+            "system> {}",
+            serde_json::to_string_pretty(records).unwrap_or_else(|_| "[]".to_string())
+        );
+        return;
+    };
+    if items.is_empty() {
+        println!("system> no pending consents");
+        return;
+    }
+    println!("system> pending consents:");
+    for item in items {
+        let id = item.get("consent_id").and_then(|v| v.as_str()).unwrap_or("?");
+        let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let summary = item
+            .get("human_summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no summary)");
+        println!("  - {} [{}] {}", id, status, summary);
+    }
+}
+
+fn print_repl_chat_response(response: &ChatResponse) {
+    println!("assistant> {}", response.final_text);
+    println!("system> state={}", response.execution_state);
+    if let Some(token) = &response.consent_token {
+        println!("system> consent_token={token}");
+    }
+    if !response.proposed_actions.is_empty() {
+        println!("system> proposed:");
+        for evt in &response.proposed_actions {
+            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
+        }
+    }
+    if !response.executed_action_events.is_empty() {
+        println!("system> executed:");
+        for evt in &response.executed_action_events {
+            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
+        }
+    }
 }
 
 fn local_rpc<T>(client: &mut JsonRpcClient<AgentService>, method: &str, params: Value) -> Result<T, String>
