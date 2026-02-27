@@ -271,25 +271,26 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     frame.render_widget(chat, rows[0]);
 
     let detail_text = if let Some(resp) = &app.last_chat_response {
+        let feed = resp.to_execution_feed_item(None);
         let mut lines = vec![
-            format!("state: {}", resp.execution_state),
-            format!("audit: {}", resp.audit_id),
+            format!("state: {}", feed.status),
+            format!("audit: {}", feed.execution_id),
         ];
         if let Some(consent_token) = &resp.consent_token {
             lines.push(format!("consent_token: {}", consent_token));
         }
-        if let Some(consent) = &resp.consent_request {
+        if let Some(consent) = &feed.consent_request {
             lines.push(format!("consent: {}", consent.human_summary));
         }
-        if !resp.proposed_actions.is_empty() {
+        if !feed.proposed_actions.is_empty() {
             lines.push("proposed:".to_string());
-            for evt in &resp.proposed_actions {
+            for evt in &feed.proposed_actions {
                 lines.push(format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status));
             }
         }
-        if !resp.executed_action_events.is_empty() {
+        if !feed.executed_action_events.is_empty() {
             lines.push("executed:".to_string());
-            for evt in &resp.executed_action_events {
+            for evt in &feed.executed_action_events {
                 lines.push(format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status));
             }
         }

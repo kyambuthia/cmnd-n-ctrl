@@ -372,6 +372,7 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
     let mut provider_name = "openai-stub".to_string();
     let mut require_confirmation = true;
     let mut session_id: Option<String> = None;
+    let mut history: Vec<ExecutionFeedItem> = Vec::new();
 
     print_repl_banner(&provider_name, require_confirmation, session_id.as_deref());
 
@@ -433,6 +434,56 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
             );
             continue;
         }
+        if input.eq_ignore_ascii_case("/history") {
+            print_repl_history(&history, None);
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/history find ") {
+            let q = rest.trim();
+            if q.is_empty() {
+                println!("system> usage: /history find <text>");
+            } else {
+                print_repl_history(&history, Some(q));
+            }
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/replay ") {
+            let execution_id = rest.trim();
+            if execution_id.is_empty() {
+                println!("system> usage: /replay <execution_id>");
+                continue;
+            }
+            let Some(item) = history.iter().rev().find(|x| x.execution_id == execution_id).cloned() else {
+                println!("system> execution not found: {}", execution_id);
+                continue;
+            };
+            let Some(prompt) = item.user_prompt.clone() else {
+                println!("system> execution {} has no replayable prompt", execution_id);
+                continue;
+            };
+            let chat_request = ChatRequest {
+                session_id: session_id.clone(),
+                messages: ipc::sample_messages(&prompt),
+                provider_config: ProviderConfig {
+                    provider_name: provider_name.clone(),
+                    model: None,
+                    config_json: None,
+                },
+                mode: if require_confirmation {
+                    ChatMode::RequireConfirmation
+                } else {
+                    ChatMode::BestEffort
+                },
+            };
+            let response = client.chat_request(chat_request);
+            if response.session_id.is_some() {
+                session_id = response.session_id.clone();
+            }
+            let feed_item = response.to_execution_feed_item(Some(prompt));
+            history.push(feed_item.clone());
+            print_feed_item(&feed_item, response.consent_token.as_deref());
+            continue;
+        }
         if input.eq_ignore_ascii_case("/session new") {
             let session: Value = local_rpc(client, "sessions.create", json!({ "title": "Interactive Session" }))
                 .map_err(io::Error::other)?;
@@ -459,7 +510,9 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
             }
             let response: ChatResponse = local_rpc(client, "consent.approve", json!({ "consent_id": consent_id }))
                 .map_err(io::Error::other)?;
-            print_repl_chat_response(&response);
+            let feed_item = response.to_execution_feed_item(None);
+            history.push(feed_item.clone());
+            print_feed_item(&feed_item, response.consent_token.as_deref());
             continue;
         }
         if let Some(rest) = input.strip_prefix("/consent deny ") {
@@ -470,7 +523,9 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
             }
             let response: ChatResponse = local_rpc(client, "consent.deny", json!({ "consent_id": consent_id }))
                 .map_err(io::Error::other)?;
-            print_repl_chat_response(&response);
+            let feed_item = response.to_execution_feed_item(None);
+            history.push(feed_item.clone());
+            print_feed_item(&feed_item, response.consent_token.as_deref());
             continue;
         }
         if input.eq_ignore_ascii_case("/tools") {
@@ -509,7 +564,9 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
         if response.session_id.is_some() {
             session_id = response.session_id.clone();
         }
-        print_repl_chat_response(&response);
+        let feed_item = response.to_execution_feed_item(Some(input.to_string()));
+        history.push(feed_item.clone());
+        print_feed_item(&feed_item, response.consent_token.as_deref());
     }
 
     Ok(())
@@ -534,6 +591,9 @@ fn print_repl_help() {
     println!("  /provider <name>");
     println!("  /mode confirm|best");
     println!("  /session new|clear|show");
+    println!("  /history");
+    println!("  /history find <text>");
+    println!("  /replay <execution_id>");
     println!("  /consent list");
     println!("  /consent approve <id>");
     println!("  /consent deny <id>");
@@ -562,11 +622,6 @@ fn print_repl_consents(records: &Value) {
             .unwrap_or("(no summary)");
         println!("  - {} [{}] {}", id, status, summary);
     }
-}
-
-fn print_repl_chat_response(response: &ChatResponse) {
-    let feed_item = response.to_execution_feed_item(None);
-    print_feed_item(&feed_item, response.consent_token.as_deref());
 }
 
 fn local_rpc<T>(client: &mut JsonRpcClient<AgentService>, method: &str, params: Value) -> Result<T, String>
@@ -1155,6 +1210,56 @@ fn print_feed_item(item: &ExecutionFeedItem, consent_token: Option<&str>) {
         for evt in &item.executed_action_events {
             println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
         }
+    }
+}
+
+fn print_repl_history(items: &[ExecutionFeedItem], query: Option<&str>) {
+    if items.is_empty() {
+        println!("system> history is empty");
+        return;
+    }
+    let query_lower = query.map(|q| q.to_ascii_lowercase());
+    println!("system> execution history:");
+    let mut shown = 0usize;
+    for item in items.iter().rev() {
+        let prompt = item
+            .user_prompt
+            .clone()
+            .unwrap_or_else(|| "(no prompt)".to_string());
+        let matches = if let Some(q) = &query_lower {
+            format!(
+                "{} {} {}",
+                item.execution_id.to_ascii_lowercase(),
+                prompt.to_ascii_lowercase(),
+                item.assistant_text.to_ascii_lowercase()
+            )
+            .contains(q)
+        } else {
+            true
+        };
+        if !matches {
+            continue;
+        }
+        shown += 1;
+        println!(
+            "  - {} [{}] prompt={}",
+            item.execution_id,
+            item.status,
+            truncate_inline(&prompt, 72)
+        );
+    }
+    if shown == 0 {
+        println!("system> no history entries matched");
+    }
+}
+
+fn truncate_inline(input: &str, max: usize) -> String {
+    let mut chars = input.chars();
+    let out: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
+        format!("{out}...")
+    } else {
+        out
     }
 }
 
