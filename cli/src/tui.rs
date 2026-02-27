@@ -198,40 +198,38 @@ fn render(frame: &mut Frame, app: &TuiApp) {
         ])
         .split(frame.area());
 
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(12),
-            Constraint::Percentage(76),
-            Constraint::Percentage(12),
-        ])
-        .split(outer[0]);
+    let columns = match app.focus {
+        FocusPane::Chat => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(0), Constraint::Min(10), Constraint::Length(0)])
+            .split(outer[0]),
+        FocusPane::Sessions => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(28), Constraint::Percentage(72), Constraint::Length(0)])
+            .split(outer[0]),
+        FocusPane::Consents | FocusPane::Audit => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(0), Constraint::Percentage(72), Constraint::Percentage(28)])
+            .split(outer[0]),
+    };
 
-    render_sessions(frame, columns[0], app);
+    if columns[0].width > 0 {
+        render_sessions(frame, columns[0], app);
+    }
     render_chat(frame, columns[1], app);
-    render_right(frame, columns[2], app);
-    render_input(frame, outer[1], app);
+    if columns[2].width > 0 {
+        render_right(frame, columns[2], app);
+    }
+
+    let input_rows = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(15), Constraint::Percentage(70), Constraint::Percentage(15)])
+        .split(outer[1]);
+    render_input(frame, input_rows[1], app);
     render_status(frame, outer[2], app);
 }
 
 fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
-    if app.focus != FocusPane::Sessions {
-        let selected = app
-            .sessions
-            .get(app.selected_session)
-            .map(|s| format!("{} ({})", s.id, s.message_count))
-            .unwrap_or_else(|| "(none)".to_string());
-        let summary = Paragraph::new(vec![Line::from(format!(
-            "s:{} / {}",
-            selected,
-            app.sessions.len()
-        ))])
-        .block(focused_block("Session".to_string(), false))
-        .wrap(Wrap { trim: true });
-        frame.render_widget(summary, area);
-        return;
-    }
-
     let items = if app.sessions.is_empty() {
         vec![ListItem::new("(no sessions)")]
     } else {
@@ -311,24 +309,6 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
 }
 
 fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
-    if app.focus != FocusPane::Consents && app.focus != FocusPane::Audit {
-        let latest_audit = app
-            .audits
-            .get(app.selected_audit)
-            .map(|a| a.audit_id.clone())
-            .unwrap_or_else(|| "(none)".to_string());
-        let summary = Paragraph::new(vec![Line::from(format!(
-            "c:{} a:{} {}",
-            app.consents.len(),
-            app.audits.len(),
-            latest_audit
-        ))])
-        .block(focused_block("Meta".to_string(), false))
-        .wrap(Wrap { trim: true });
-        frame.render_widget(summary, area);
-        return;
-    }
-
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -398,6 +378,7 @@ fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         app.current_session_id().unwrap_or_else(|| "(none)".to_string())
     );
     let input = Paragraph::new(app.chat_input.as_str())
+        .style(Style::default().bg(Color::Rgb(34, 44, 64)).fg(Color::White))
         .block(focused_block(title, app.focus == FocusPane::Chat))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, area);
