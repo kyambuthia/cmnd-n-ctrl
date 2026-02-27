@@ -56,7 +56,7 @@ fn print_help() {
     println!("  cli project open|status ...");
     println!("  cli audit list|show ...");
     println!("  cli doctor [--json] [--strict] [--addr <host:port>]");
-    println!("  cli tui   # interactive terminal UI (ratatui), falls back to REPL");
+    println!("  cli tui   # legacy alias for interactive mode (prefer plain `cli`)");
     println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
     println!("  cli serve-http [--addr <host:port>]");
@@ -235,6 +235,7 @@ fn main() {
             handle_doctor_command(&mut client, &args[1..]);
         }
         "tui" => {
+            eprintln!("note: `cli` (no args) is the default interactive entry point");
             run_interactive_mode(&mut client);
         }
         "approve" => {
