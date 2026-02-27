@@ -93,7 +93,7 @@
       }
       .main {
         display: grid;
-        grid-template-rows: 1fr auto;
+        grid-template-rows: 1fr;
         min-height: 0;
         background: var(--panel);
       }
@@ -588,15 +588,6 @@
               </div>
             </div>
           </div>
-          <div class="compose">
-            <label class="section-title" for="prompt">Request</label>
-            <div class="compose-arrow">-> type your request</div>
-            <textarea id="prompt" placeholder="Describe the task (for example: read a file, open a page, enter values, and submit)"></textarea>
-            <div class="row">
-              <button id="send" type="button">Send</button>
-              <span class="muted">Enter to send · Shift+Enter for newline</span>
-            </div>
-          </div>
         </section>
 
         <aside class="inspector">
@@ -618,6 +609,15 @@
             <pre id="raw">No requests yet.</pre>
           </section>
         </aside>
+      </div>
+      <div class="compose">
+        <label class="section-title" for="prompt">Request</label>
+        <div class="compose-arrow">-> type your request</div>
+        <textarea id="prompt" placeholder="Describe the task (for example: read a file, open a page, enter values, and submit)"></textarea>
+        <div class="row">
+          <button id="send" type="button">Send</button>
+          <span class="muted">Enter to send · Shift+Enter for newline</span>
+        </div>
       </div>
     </main>
     <script type="module" src="./main.ts"></script>
