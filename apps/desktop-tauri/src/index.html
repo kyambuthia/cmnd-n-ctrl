@@ -38,7 +38,7 @@
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        padding: 0.6rem 0.8rem;
+        padding: 0.45rem 0.65rem;
         border-bottom: 1px solid var(--border);
         background: #0b1017;
       }
@@ -52,9 +52,9 @@
       }
       .brand h1 {
         margin: 0;
-        font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
-        font-size: 1rem;
-        letter-spacing: 0.02em;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+        font-size: 0.92rem;
+        letter-spacing: 0.01em;
       }
       .shell {
         display: grid;
@@ -116,9 +116,9 @@
       }
       .card h2 {
         margin: 0 0 0.35rem;
-        font-size: 0.74rem;
+        font-size: 0.7rem;
         color: var(--muted);
-        letter-spacing: 0.04em;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
       }
       .message {
@@ -167,7 +167,7 @@
       .history-item {
         border-top: 1px solid var(--border);
         background: transparent;
-        padding: 0.45rem 0.35rem;
+        padding: 0.4rem 0.3rem;
       }
       .history-item details {
         margin-top: 0.35rem;
@@ -180,12 +180,12 @@
       .history-item .status-badge {
         display: inline-flex;
         align-items: center;
-        font-size: 0.68rem;
+        font-size: 0.64rem;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.05em;
         border: 1px solid var(--border);
-        border-radius: 999px;
-        padding: 0.1rem 0.45rem;
+        border-radius: 3px;
+        padding: 0.04rem 0.28rem;
         margin-right: 0.45rem;
       }
       .history-item[data-kind="ok"] .status-badge {
@@ -212,8 +212,7 @@
       .history-item .meta {
         color: var(--muted);
         font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.02em;
         margin-bottom: 0.2rem;
       }
       .history-item .text {
@@ -265,8 +264,8 @@
       }
       .compose-arrow {
         color: #d7dce2;
-        font-size: 0.88rem;
-        margin-bottom: 0.35rem;
+        font-size: 0.8rem;
+        margin-bottom: 0.25rem;
       }
       textarea {
         width: 100%;
@@ -340,7 +339,7 @@
         border: 1px solid transparent;
         border-radius: 6px;
         padding: 0.45rem 0.7rem;
-        background: #1a2a40;
+        background: #243041;
         color: #d9e8f8;
         cursor: pointer;
         font-weight: 500;
@@ -437,7 +436,7 @@
         justify-content: space-between;
         align-items: center;
         gap: 0.75rem;
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.1rem;
       }
       .toolbar-title {
         display: grid;
@@ -448,7 +447,8 @@
       }
       .toolbar-title span {
         color: var(--muted);
-        font-size: 0.82rem;
+        font-size: 0.78rem;
+        display: none;
       }
       .icon-btn {
         background: transparent;
@@ -480,7 +480,6 @@
           <div class="brand-badge" aria-hidden="true"></div>
           <div>
             <h1>cmnd-n-ctrl Desktop</h1>
-            <div class="muted">Local-first assistant prototype shell</div>
           </div>
         </div>
         <div class="row" style="margin-top:0;">

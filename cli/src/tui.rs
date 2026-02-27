@@ -281,10 +281,12 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
                     .map(|p| truncate_inline(p, 56))
                     .unwrap_or_else(|| "(no prompt)".to_string())
             );
-            lines.push(Line::from(vec![Span::styled(
-                row,
-                Style::default().bg(Color::Rgb(52, 56, 64)).fg(Color::White),
-            )]));
+            let row_style = if idx == app.selected_execution && app.focus == FocusPane::Chat {
+                Style::default().bg(Color::Rgb(52, 56, 64)).fg(Color::White)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            lines.push(Line::from(vec![Span::styled(row, row_style)]));
             if idx == app.selected_execution && app.show_execution_details {
                 lines.push(Line::from(format!("   assistant> {}", entry.assistant_text)));
                 if let Some(session_id) = &entry.session_id {
