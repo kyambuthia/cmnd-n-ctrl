@@ -1,8 +1,9 @@
 use ipc::{ToolCall, ToolResult};
 use serde_json::{json, Value};
-use std::rc::Rc;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub trait ActionBackend {
@@ -743,19 +744,40 @@ impl ActionBackend for StubActionBackend {
 
         if tool_call.name == "desktop.open_url" {
             let url = args.get("url").and_then(Value::as_str).unwrap_or("about:blank");
-            return ToolResult {
-                tool_call_id: None,
-                name: tool_call.name.clone(),
-                result_json: json!({
-                    "status": "ok",
-                    "platform": self.platform,
-                    "url": url,
-                    "note": "stub_only_not_opened"
-                })
-                .to_string(),
-                evidence: crate::evidence::action_evidence(
-                    format!("Approved open_url stub for '{}' on {}", url, self.platform),
-                    format!("stub://{}/desktop.open_url", self.platform),
+            let Some((cmd, argv)) = desktop_open_url_command(url) else {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    "unsupported_platform:open_url",
+                    "desktop.open_url",
+                    format!("desktop://{}/open_url", self.platform),
+                );
+            };
+            let spawn = Command::new(&cmd).args(&argv).spawn();
+            return match spawn {
+                Ok(_) => ToolResult {
+                    tool_call_id: None,
+                    name: tool_call.name.clone(),
+                    result_json: json!({
+                        "status": "ok",
+                        "platform": self.platform,
+                        "url": url,
+                        "command": cmd,
+                        "args": argv,
+                        "note": "best_effort_open_dispatched"
+                    })
+                    .to_string(),
+                    evidence: crate::evidence::action_evidence(
+                        format!("Dispatched open_url '{}' on {}", url, self.platform),
+                        format!("desktop://{}/desktop.open_url", self.platform),
+                    ),
+                },
+                Err(err) => tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    format!("open_url_spawn_failed:{err}"),
+                    "desktop.open_url",
+                    format!("desktop://{}/desktop.open_url", self.platform),
                 ),
             };
         }
@@ -785,19 +807,51 @@ impl ActionBackend for StubActionBackend {
 
         if tool_call.name == "desktop.app.activate" {
             let app = args.get("app").and_then(Value::as_str).unwrap_or("unknown");
-            return ToolResult {
-                tool_call_id: None,
-                name: tool_call.name.clone(),
-                result_json: json!({
-                    "status": "ok",
-                    "platform": self.platform,
-                    "app": app,
-                    "note": "stub_only_not_real_window_activation"
-                })
-                .to_string(),
-                evidence: crate::evidence::action_evidence(
-                    format!("Activated desktop app stub '{}' on {}", app, self.platform),
-                    format!("stub://{}/desktop.app.activate", self.platform),
+            let Some((cmd, argv)) = desktop_activate_command(app) else {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    "unsupported_platform:app_activate",
+                    "desktop.app.activate",
+                    format!("desktop://{}/app_activate", self.platform),
+                );
+            };
+            let output = Command::new(&cmd).args(&argv).output();
+            return match output {
+                Ok(out) if out.status.success() => ToolResult {
+                    tool_call_id: None,
+                    name: tool_call.name.clone(),
+                    result_json: json!({
+                        "status": "ok",
+                        "platform": self.platform,
+                        "app": app,
+                        "command": cmd,
+                        "args": argv,
+                        "note": "best_effort_activation_attempted"
+                    })
+                    .to_string(),
+                    evidence: crate::evidence::action_evidence(
+                        format!("Attempted app activation '{}' on {}", app, self.platform),
+                        format!("desktop://{}/desktop.app.activate", self.platform),
+                    ),
+                },
+                Ok(out) => tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    format!(
+                        "app_activate_failed:exit={}:stderr={}",
+                        out.status.code().map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                    "desktop.app.activate",
+                    format!("desktop://{}/desktop.app.activate", self.platform),
+                ),
+                Err(err) => tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    format!("app_activate_spawn_failed:{err}"),
+                    "desktop.app.activate",
+                    format!("desktop://{}/desktop.app.activate", self.platform),
                 ),
             };
         }
@@ -815,6 +869,75 @@ impl ActionBackend for StubActionBackend {
             ),
         }
     }
+}
+
+fn desktop_open_url_command(url: &str) -> Option<(String, Vec<String>)> {
+    #[cfg(target_os = "macos")]
+    {
+        return Some(("open".to_string(), vec![url.to_string()]));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return Some((
+            "cmd".to_string(),
+            vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "".to_string(),
+                url.to_string(),
+            ],
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return Some(("xdg-open".to_string(), vec![url.to_string()]));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn desktop_activate_command(app: &str) -> Option<(String, Vec<String>)> {
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = app.replace('"', "\\\"");
+        return Some((
+            "osascript".to_string(),
+            vec!["-e".to_string(), format!("tell application \"{escaped}\" to activate")],
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let escaped = app.replace('\'', "''");
+        return Some((
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!(
+                    "$p = Get-Process -Name '{escaped}' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($p) {{ (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null; exit 0 }} else {{ exit 1 }}"
+                ),
+            ],
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let escaped = shell_single_quote(app);
+        return Some((
+            "/bin/sh".to_string(),
+            vec![
+                "-lc".to_string(),
+                format!(
+                    "if command -v wmctrl >/dev/null 2>&1; then wmctrl -xa {escaped}; elif command -v xdotool >/dev/null 2>&1; then xdotool search --name {escaped} windowactivate; else exit 127; fi"
+                ),
+            ],
+        ));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn shell_single_quote(input: &str) -> String {
+    format!("'{}'", input.replace('\'', "'\"'\"'"))
 }
 
 #[cfg(test)]
@@ -863,6 +986,30 @@ mod tests {
         assert!(result.result_json.contains("\"server\":\"mcp-1\""));
         assert!(result.result_json.contains("\"tool\":\"browser.open\""));
         assert!(result.result_json.contains("\"url\":\"https://example.com\""));
+    }
+
+    #[test]
+    fn desktop_open_url_command_selects_platform_launcher() {
+        let (cmd, args) = desktop_open_url_command("https://example.com").expect("command");
+        #[cfg(target_os = "linux")]
+        assert_eq!(cmd, "xdg-open");
+        #[cfg(target_os = "macos")]
+        assert_eq!(cmd, "open");
+        #[cfg(target_os = "windows")]
+        assert_eq!(cmd, "cmd");
+        assert!(!args.is_empty());
+    }
+
+    #[test]
+    fn desktop_activate_command_selects_platform_adapter() {
+        let (cmd, args) = desktop_activate_command("Browser").expect("command");
+        #[cfg(target_os = "linux")]
+        assert_eq!(cmd, "/bin/sh");
+        #[cfg(target_os = "macos")]
+        assert_eq!(cmd, "osascript");
+        #[cfg(target_os = "windows")]
+        assert_eq!(cmd, "powershell");
+        assert!(!args.is_empty());
     }
 }
 
