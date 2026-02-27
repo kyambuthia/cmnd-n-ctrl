@@ -167,6 +167,34 @@
         background: #161616;
         padding: 0.55rem 0.65rem;
       }
+      .history-item .status-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0.1rem 0.45rem;
+        margin-right: 0.45rem;
+      }
+      .history-item[data-kind="ok"] .status-badge {
+        border-color: rgba(119, 196, 123, 0.55);
+        color: #c8efcb;
+      }
+      .history-item[data-kind="warn"] .status-badge {
+        border-color: rgba(216, 95, 54, 0.55);
+        color: #ffc0ab;
+      }
+      .history-item[data-kind="consent"] .status-badge {
+        border-color: rgba(242, 177, 52, 0.6);
+        color: #ffe0a0;
+      }
+      .history-item .prompt {
+        color: #d8d0c4;
+        margin-top: 0.35rem;
+        white-space: pre-wrap;
+      }
       .history-item .meta {
         color: var(--muted);
         font-size: 0.72rem;
@@ -464,15 +492,15 @@
             <section class="sidebar-card">
               <h2>Quick Requests</h2>
               <div class="stack-btns">
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:time">Time</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:add 2 3">Add 2 + 3</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:upper hello world">Uppercase</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:ls .">List Files</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:cat README.md">Read File</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:grep TODO in .">Search Text</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:json package.json">Read JSON</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:write notes/generated.txt :: hello from cmnd-n-ctrl">Write File (consent)</button>
-                <button class="ghost prompt-preset" type="button" data-prompt="tool:open https://example.com">Open URL (consent)</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="What time is it right now?">Time</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Add 2 and 3.">Add 2 + 3</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Please uppercase hello world.">Uppercase</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="List files in this project.">List Files</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Read file README.md">Read File</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Search for TODO in project files.">Search Text</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Read package.json as JSON.">Read JSON</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Create directory notes.">Create Folder (consent)</button>
+                <button class="ghost prompt-preset" type="button" data-prompt="Open https://example.com">Open URL (consent)</button>
               </div>
             </section>
           </div>
@@ -483,8 +511,8 @@
             <div class="stack">
               <div class="main-toolbar">
                 <div class="toolbar-title">
-                  <strong>Task Execution</strong>
-                  <span>Supervised actions with explicit consent and audit trail</span>
+                  <strong>Execution Feed</strong>
+                  <span>Streaming-first supervised actions with consent + audit</span>
                 </div>
                 <button id="clearView" class="ghost" type="button">Clear View</button>
               </div>

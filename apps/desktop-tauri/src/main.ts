@@ -84,20 +84,31 @@ function clearHistory() {
   `;
 }
 
-function pushHistory(kind, label, body) {
+function pushHistory(kind, label, body, details = {}) {
   const item = document.createElement('div');
   item.className = 'history-item';
+  item.dataset.kind = kind;
 
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.textContent = `${label} • ${nowLabel()}`;
+  const badge = document.createElement('span');
+  badge.className = 'status-badge';
+  badge.textContent = (details.status || kind || 'event').toString();
+  const metaText = document.createElement('span');
+  metaText.textContent = `${label} • ${nowLabel()}`;
+  meta.append(badge, metaText);
 
   const text = document.createElement('div');
   text.className = 'text';
   text.textContent = body;
 
-  item.dataset.kind = kind;
   item.append(meta, text);
+  if (details.prompt) {
+    const prompt = document.createElement('div');
+    prompt.className = 'prompt';
+    prompt.textContent = `you> ${details.prompt}`;
+    item.append(prompt);
+  }
   activityHistoryEl.prepend(item);
 }
 
@@ -344,6 +355,12 @@ function renderChatResult(result) {
       ['consent', requestFingerprint, ...pending.map((p) => p.riskTier)],
     );
     pushHistory('consent', 'Consent Needed', pending.map((p) => p.toolName).join(', '));
+    pushHistory(
+      'consent',
+      'Execution Pending Approval',
+      pending.map((p) => `${p.toolName} (${p.riskTier})`).join(', '),
+      { status: 'waiting', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+    );
     return;
   }
 
@@ -361,6 +378,12 @@ function renderChatResult(result) {
       executed.map((evt) => normalizeTier(evt.capability_tier)),
     );
     pushHistory('ok', 'Action Executed', executed.map((evt) => evt.tool_name).join(', '));
+    pushHistory(
+      'ok',
+      'Execution Completed',
+      (result.final_text || 'Completed').toString(),
+      { status: 'success', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+    );
   } else if (denied.length > 0) {
     setCurrentAction(
       'warn',
@@ -369,9 +392,21 @@ function renderChatResult(result) {
       denied.map((evt) => normalizeTier(evt.capability_tier)),
     );
     pushHistory('warn', 'Action Denied', denied.map((evt) => evt.tool_name).join(', '));
+    pushHistory(
+      'warn',
+      'Execution Denied',
+      denied.map((evt) => `${evt.tool_name}: ${evt.reason || 'Denied'}`).join(', '),
+      { status: 'failed', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+    );
   } else {
     setCurrentAction('event', 'No Action Taken', 'The request completed without executing a tool action.', ['idle']);
     pushHistory('event', 'No Action Taken', 'Request completed without executing a tool action.');
+    pushHistory(
+      'event',
+      'Execution Completed',
+      (result.final_text || 'No action taken').toString(),
+      { status: 'completed', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+    );
   }
 }
 

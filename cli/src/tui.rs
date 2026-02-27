@@ -50,6 +50,22 @@ struct TuiApp {
     last_chat_response: Option<ChatResponse>,
 }
 
+fn pane_title(base: &str, focused: bool) -> String {
+    if focused {
+        format!("{} *", base)
+    } else {
+        base.to_string()
+    }
+}
+
+fn focused_block<'a>(title: String, focused: bool) -> Block<'a> {
+    let border = if focused { Color::Yellow } else { Color::DarkGray };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .title(title)
+}
+
 impl TuiApp {
     fn new() -> Self {
         Self {
@@ -198,13 +214,9 @@ fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp)
     } else {
         Some(app.selected_session.min(app.sessions.len() - 1))
     });
-    let title = if app.focus == FocusPane::Sessions {
-        "Sessions *"
-    } else {
-        "Sessions"
-    };
+    let title = pane_title("Sessions", app.focus == FocusPane::Sessions);
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(focused_block(title, app.focus == FocusPane::Sessions))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -251,11 +263,10 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         ]));
     }
     let chat = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(if app.focus == FocusPane::Chat { "Feed *" } else { "Feed" }),
-        )
+        .block(focused_block(
+            pane_title("Feed", app.focus == FocusPane::Chat),
+            app.focus == FocusPane::Chat,
+        ))
         .wrap(Wrap { trim: false });
     frame.render_widget(chat, rows[0]);
 
@@ -287,7 +298,10 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         "No execution yet.".to_string()
     };
     let detail = Paragraph::new(detail_text)
-        .block(Block::default().borders(Borders::ALL).title("Execution"))
+        .block(focused_block(
+            pane_title("Execution", app.focus == FocusPane::Chat),
+            app.focus == FocusPane::Chat,
+        ))
         .wrap(Wrap { trim: false });
     frame.render_widget(detail, rows[1]);
 }
@@ -319,13 +333,9 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     } else {
         Some(app.selected_consent.min(app.consents.len() - 1))
     });
-    let consent_title = if app.focus == FocusPane::Consents {
-        "Consent *"
-    } else {
-        "Consent"
-    };
+    let consent_title = pane_title("Consent", app.focus == FocusPane::Consents);
     let consent_list = List::new(consent_items)
-        .block(Block::default().borders(Borders::ALL).title(consent_title))
+        .block(focused_block(consent_title, app.focus == FocusPane::Consents))
         .highlight_style(Style::default().fg(Color::Yellow));
     frame.render_stateful_widget(consent_list, rows[0], &mut consent_state);
 
@@ -346,11 +356,10 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
             .collect()
     };
     let audit = Paragraph::new(audit_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(if app.focus == FocusPane::Audit { "Audit *" } else { "Audit" }),
-        )
+        .block(focused_block(
+            pane_title("Audit", app.focus == FocusPane::Audit),
+            app.focus == FocusPane::Audit,
+        ))
         .wrap(Wrap { trim: false });
     frame.render_widget(audit, rows[1]);
 }
@@ -367,7 +376,7 @@ fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         app.current_session_id().unwrap_or_else(|| "(none)".to_string())
     );
     let input = Paragraph::new(app.chat_input.as_str())
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(focused_block(title, app.focus == FocusPane::Chat))
         .wrap(Wrap { trim: false });
     frame.render_widget(input, area);
 }
@@ -380,7 +389,7 @@ fn render_status(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         FocusPane::Audit => "audit",
     };
     let status = Paragraph::new(format!("pane={pane} | {}", app.status))
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().fg(Color::Gray).add_modifier(Modifier::DIM));
     frame.render_widget(status, area);
 }
 
