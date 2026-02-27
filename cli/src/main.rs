@@ -1,13 +1,14 @@
 mod tui;
 
 use std::env;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 use agent::AgentService;
 use ipc::jsonrpc::{Id, Request};
 use ipc::{mcp, ChatApproveRequest, ChatDenyRequest, ChatMode, ChatRequest, ChatResponse, JsonRpcClient, JsonRpcServer, ProviderConfig, Tool};
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +42,7 @@ fn print_help() {
     println!("cli - Rust CLI client for local assistant IPC");
     println!();
     println!("USAGE:");
-    println!("  cli        # launches interactive terminal UI (ratatui)");
+    println!("  cli        # interactive mode: ratatui TUI if available, else line REPL");
     println!("  cli --help");
     println!("  cli tools [--json] [--raw] [--addr <host:port>]");
     println!("  cli chat <message> [--provider <name>] [--session <id>] [--require-confirmation] [--json] [--addr <host:port>]");
@@ -55,7 +56,7 @@ fn print_help() {
     println!("  cli project open|status ...");
     println!("  cli audit list|show ...");
     println!("  cli doctor [--json] [--strict] [--addr <host:port>]");
-    println!("  cli tui   # interactive terminal UI (ratatui)");
+    println!("  cli tui   # interactive terminal UI (ratatui), falls back to REPL");
     println!("  cli rpc <method> <params-json> [--addr <host:port>]");
     println!("  cli serve-stdio");
     println!("  cli serve-http [--addr <host:port>]");
@@ -73,10 +74,7 @@ fn main() {
     let mut client = JsonRpcClient::new(&mut server);
 
     if args.is_empty() {
-        if let Err(err) = tui::run(&mut client) {
-            eprintln!("tui error: {err}");
-            std::process::exit(1);
-        }
+        run_interactive_mode(&mut client);
         return;
     }
 
@@ -237,10 +235,7 @@ fn main() {
             handle_doctor_command(&mut client, &args[1..]);
         }
         "tui" => {
-            if let Err(err) = tui::run(&mut client) {
-                eprintln!("tui error: {err}");
-                std::process::exit(1);
-            }
+            run_interactive_mode(&mut client);
         }
         "approve" => {
             if args.len() < 2 {
@@ -353,6 +348,192 @@ fn main() {
 
 fn contains_tool_syntax(input: &str) -> bool {
     input.to_ascii_lowercase().contains("tool:")
+}
+
+fn run_interactive_mode(client: &mut JsonRpcClient<AgentService>) {
+    let has_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
+    if has_terminal {
+        if let Err(err) = tui::run(client) {
+            eprintln!("tui unavailable ({err}); falling back to interactive shell");
+        } else {
+            return;
+        }
+    } else {
+        eprintln!("terminal UI unavailable in non-tty context; starting interactive shell");
+    }
+
+    if let Err(err) = run_repl(client) {
+        eprintln!("repl error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
+    let mut provider_name = "openai-stub".to_string();
+    let mut require_confirmation = true;
+    let mut session_id: Option<String> = None;
+
+    println!("cmnd-n-ctrl interactive shell");
+    println!("Type natural language prompts. Type '/help' for commands.");
+
+    let stdin = io::stdin();
+    let mut line = String::new();
+    loop {
+        print!("cnc> ");
+        io::stdout().flush()?;
+
+        line.clear();
+        if stdin.read_line(&mut line)? == 0 {
+            println!();
+            break;
+        }
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if input.eq_ignore_ascii_case("/quit") || input.eq_ignore_ascii_case("/exit") {
+            break;
+        }
+        if input.eq_ignore_ascii_case("/help") {
+            println!("commands:");
+            println!("  /help");
+            println!("  /quit");
+            println!("  /provider <name>");
+            println!("  /mode confirm|best");
+            println!("  /session new|clear|show");
+            println!("  /consent list");
+            println!("  /consent approve <id>");
+            println!("  /consent deny <id>");
+            println!("  /tools");
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/provider ") {
+            let next = rest.trim();
+            if next.is_empty() {
+                println!("provider unchanged: {}", provider_name);
+            } else {
+                provider_name = next.to_string();
+                println!("provider: {}", provider_name);
+            }
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/mode ") {
+            match rest.trim() {
+                "confirm" => {
+                    require_confirmation = true;
+                    println!("mode: require confirmation");
+                }
+                "best" => {
+                    require_confirmation = false;
+                    println!("mode: best effort");
+                }
+                _ => println!("usage: /mode confirm|best"),
+            }
+            continue;
+        }
+        if input.eq_ignore_ascii_case("/session clear") {
+            session_id = None;
+            println!("session cleared");
+            continue;
+        }
+        if input.eq_ignore_ascii_case("/session show") {
+            println!(
+                "session: {}",
+                session_id.clone().unwrap_or_else(|| "(none)".to_string())
+            );
+            continue;
+        }
+        if input.eq_ignore_ascii_case("/session new") {
+            let session: Value = local_rpc(client, "sessions.create", json!({ "title": "Interactive Session" }))
+                .map_err(io::Error::other)?;
+            session_id = session
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            println!(
+                "session: {}",
+                session_id.clone().unwrap_or_else(|| "(unknown)".to_string())
+            );
+            continue;
+        }
+        if input.eq_ignore_ascii_case("/consent list") {
+            let records: Value = local_rpc(client, "consent.list", json!({})).map_err(io::Error::other)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&records).unwrap_or_else(|_| "[]".to_string())
+            );
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/consent approve ") {
+            let consent_id = rest.trim();
+            if consent_id.is_empty() {
+                println!("usage: /consent approve <id>");
+                continue;
+            }
+            let response: ChatResponse = local_rpc(client, "consent.approve", json!({ "consent_id": consent_id }))
+                .map_err(io::Error::other)?;
+            print_chat_response(&response, false);
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/consent deny ") {
+            let consent_id = rest.trim();
+            if consent_id.is_empty() {
+                println!("usage: /consent deny <id>");
+                continue;
+            }
+            let response: ChatResponse = local_rpc(client, "consent.deny", json!({ "consent_id": consent_id }))
+                .map_err(io::Error::other)?;
+            print_chat_response(&response, false);
+            continue;
+        }
+        if input.eq_ignore_ascii_case("/tools") {
+            for tool in client.tools_list() {
+                println!("{} - {}", tool.name, tool.description);
+            }
+            continue;
+        }
+
+        if contains_tool_syntax(input) {
+            println!("natural-language-only mode: avoid explicit 'tool:' syntax");
+            continue;
+        }
+
+        let chat_request = ChatRequest {
+            session_id: session_id.clone(),
+            messages: ipc::sample_messages(input),
+            provider_config: ProviderConfig {
+                provider_name: provider_name.clone(),
+                model: None,
+                config_json: None,
+            },
+            mode: if require_confirmation {
+                ChatMode::RequireConfirmation
+            } else {
+                ChatMode::BestEffort
+            },
+        };
+        let response = client.chat_request(chat_request);
+        if response.session_id.is_some() {
+            session_id = response.session_id.clone();
+        }
+        print_chat_response(&response, false);
+    }
+
+    Ok(())
+}
+
+fn local_rpc<T>(client: &mut JsonRpcClient<AgentService>, method: &str, params: Value) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let raw = client.call_raw(Request::new(Id::Number(1), method, params.to_string()));
+    if let Some(err) = raw.error {
+        return Err(err.message);
+    }
+    let result = raw
+        .result_json
+        .ok_or_else(|| "missing json-rpc result".to_string())?;
+    serde_json::from_str::<T>(&result).map_err(|err| format!("invalid result payload: {err}"))
 }
 
 fn serve_stdio_jsonrpc() -> io::Result<()> {
