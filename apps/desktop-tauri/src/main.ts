@@ -141,6 +141,14 @@ function pushHistory(kind, label, body, details = {}) {
     prompt.className = 'prompt';
     prompt.textContent = `you> ${details.prompt}`;
     item.append(prompt);
+
+    const replayBtn = document.createElement('button');
+    replayBtn.className = 'ghost mini';
+    replayBtn.type = 'button';
+    replayBtn.dataset.action = 'replay';
+    replayBtn.dataset.prompt = details.prompt;
+    replayBtn.textContent = 'Replay';
+    item.append(replayBtn);
   }
   item.dataset.search = [label, body, details.prompt, details.executionId, details.sessionId]
     .filter(Boolean)
@@ -534,6 +542,11 @@ async function callJsonRpc(method, params) {
 async function runChatRequest(modeOverride) {
   resetPanelsForRequest();
   const prompt = (promptEl.value || '').trim();
+  if (prompt.toLowerCase().includes('tool:')) {
+    setStatus('Explicit tool syntax is disabled. Use natural language.');
+    setCurrentAction('warn', 'Natural Language Only', 'Use natural language prompts. "tool:" syntax is blocked.', ['policy']);
+    return;
+  }
   setStatus('Sending chat.request...');
   setCurrentAction('event', 'Processing', prompt || '(empty prompt)', ['pending']);
 
@@ -907,6 +920,11 @@ promptEl.addEventListener('keydown', async (event) => {
       await runChatRequest();
     });
   }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    promptEl.value = '';
+    setStatus('Prompt cleared');
+  }
 });
 
 if (historySearchEl) {
@@ -915,6 +933,19 @@ if (historySearchEl) {
     applyHistoryFilter();
   });
 }
+
+activityHistoryEl.addEventListener('click', async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.dataset.action !== 'replay') return;
+  const replayPrompt = target.dataset.prompt || '';
+  promptEl.value = replayPrompt;
+  promptEl.focus();
+  setStatus('Replay prompt loaded');
+  await withUiBusy(async () => {
+    await runChatRequest();
+  });
+});
 
 transport = detectTransport();
 clearHistory();
