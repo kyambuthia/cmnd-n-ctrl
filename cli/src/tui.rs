@@ -187,9 +187,9 @@ fn render(frame: &mut Frame, app: &TuiApp) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(24),
-            Constraint::Percentage(50),
-            Constraint::Percentage(26),
+            Constraint::Percentage(18),
+            Constraint::Percentage(64),
+            Constraint::Percentage(18),
         ])
         .split(outer[0]);
 
@@ -201,6 +201,23 @@ fn render(frame: &mut Frame, app: &TuiApp) {
 }
 
 fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
+    if app.focus != FocusPane::Sessions {
+        let selected = app
+            .sessions
+            .get(app.selected_session)
+            .map(|s| format!("{} ({})", s.id, s.message_count))
+            .unwrap_or_else(|| "(none)".to_string());
+        let summary = Paragraph::new(vec![
+            Line::from("session"),
+            Line::from(selected),
+            Line::from(format!("total={}", app.sessions.len())),
+        ])
+        .block(focused_block("Session".to_string(), false))
+        .wrap(Wrap { trim: true });
+        frame.render_widget(summary, area);
+        return;
+    }
+
     let items = if app.sessions.is_empty() {
         vec![ListItem::new("(no sessions)")]
     } else {
@@ -226,11 +243,6 @@ fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp)
 }
 
 fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(8)])
-        .split(area);
-
     let mut lines = Vec::<Line>::new();
     if let Some(session) = &app.session_detail {
         for m in &session.messages {
@@ -252,6 +264,7 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         lines.push(Line::from("system> create a session with 'n' or send a message"));
     }
     if let Some(resp) = &app.last_chat_response {
+        let feed = resp.to_execution_feed_item(None);
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("assistant: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
@@ -259,8 +272,28 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         ]));
         lines.push(Line::from(vec![
             Span::styled("system> ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(format!("state={} audit={}", resp.execution_state, resp.audit_id)),
+            Span::raw(format!(
+                "{} exec={} pending_consents={}",
+                feed.status,
+                feed.execution_id,
+                app.consents.len()
+            )),
         ]));
+        if !feed.proposed_actions.is_empty() || !feed.executed_action_events.is_empty() {
+            let proposed = feed
+                .proposed_actions
+                .iter()
+                .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let executed = feed
+                .executed_action_events
+                .iter()
+                .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(Line::from(format!("tools> p=[{}] e=[{}]", proposed, executed)));
+        }
     }
     let chat = Paragraph::new(lines)
         .block(focused_block(
@@ -268,46 +301,27 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
             app.focus == FocusPane::Chat,
         ))
         .wrap(Wrap { trim: false });
-    frame.render_widget(chat, rows[0]);
-
-    let detail_text = if let Some(resp) = &app.last_chat_response {
-        let feed = resp.to_execution_feed_item(None);
-        let mut lines = vec![
-            format!("state: {}", feed.status),
-            format!("audit: {}", feed.execution_id),
-        ];
-        if let Some(consent_token) = &resp.consent_token {
-            lines.push(format!("consent_token: {}", consent_token));
-        }
-        if let Some(consent) = &feed.consent_request {
-            lines.push(format!("consent: {}", consent.human_summary));
-        }
-        if !feed.proposed_actions.is_empty() {
-            lines.push("proposed:".to_string());
-            for evt in &feed.proposed_actions {
-                lines.push(format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status));
-            }
-        }
-        if !feed.executed_action_events.is_empty() {
-            lines.push("executed:".to_string());
-            for evt in &feed.executed_action_events {
-                lines.push(format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status));
-            }
-        }
-        lines.join("\n")
-    } else {
-        "No execution yet.".to_string()
-    };
-    let detail = Paragraph::new(detail_text)
-        .block(focused_block(
-            pane_title("Execution", app.focus == FocusPane::Chat),
-            app.focus == FocusPane::Chat,
-        ))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(detail, rows[1]);
+    frame.render_widget(chat, area);
 }
 
 fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
+    if app.focus != FocusPane::Consents && app.focus != FocusPane::Audit {
+        let latest_audit = app
+            .audits
+            .get(app.selected_audit)
+            .map(|a| a.audit_id.clone())
+            .unwrap_or_else(|| "(none)".to_string());
+        let summary = Paragraph::new(vec![
+            Line::from(format!("consents={}", app.consents.len())),
+            Line::from(format!("audits={}", app.audits.len())),
+            Line::from(format!("latest={}", latest_audit)),
+        ])
+        .block(focused_block("Meta".to_string(), false))
+        .wrap(Wrap { trim: true });
+        frame.render_widget(summary, area);
+        return;
+    }
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])

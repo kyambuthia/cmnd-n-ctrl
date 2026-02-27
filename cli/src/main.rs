@@ -1184,32 +1184,39 @@ fn print_chat_response(response: &ChatResponse, json_output: bool) {
 }
 
 fn print_feed_item(item: &ExecutionFeedItem, consent_token: Option<&str>) {
-    println!("execution_id: {}", item.execution_id);
-    println!("status: {}", item.status);
-    if let Some(session_id) = &item.session_id {
-        println!("session: {}", session_id);
-    }
-    if let Some(token) = consent_token {
-        println!("consent_token: {}", token);
-    }
+    let short_id = truncate_inline(&item.execution_id, 12);
+    let session = item
+        .session_id
+        .as_deref()
+        .map(|s| truncate_inline(s, 12))
+        .unwrap_or_else(|| "-".to_string());
+    println!("system> [{}] exec={} session={}", item.status, short_id, session);
     if let Some(prompt) = &item.user_prompt {
         println!("you> {}", prompt);
     }
     println!("assistant> {}", item.assistant_text);
     if let Some(consent) = &item.consent_request {
-        println!("consent: {}", consent.human_summary);
+        println!("consent?> {}", consent.human_summary);
     }
-    if !item.proposed_actions.is_empty() {
-        println!("proposed:");
-        for evt in &item.proposed_actions {
-            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-        }
+    let proposed = item
+        .proposed_actions
+        .iter()
+        .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
+        .collect::<Vec<_>>();
+    let executed = item
+        .executed_action_events
+        .iter()
+        .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
+        .collect::<Vec<_>>();
+    if !proposed.is_empty() || !executed.is_empty() {
+        println!(
+            "tools> proposed=[{}] executed=[{}]",
+            proposed.join(", "),
+            executed.join(", ")
+        );
     }
-    if !item.executed_action_events.is_empty() {
-        println!("executed:");
-        for evt in &item.executed_action_events {
-            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-        }
+    if let Some(token) = consent_token {
+        println!("system> consent_token={}", token);
     }
 }
 
