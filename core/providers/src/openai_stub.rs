@@ -1,5 +1,5 @@
 use ipc::{ChatMessage, ProviderConfig, Tool, ToolCall, ToolResult};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::provider_trait::{Provider, ProviderReply};
 
@@ -198,6 +198,30 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
             name: "desktop.app.list".to_string(),
             arguments_json: json!({ "filter": "" }).to_string(),
         });
+    }
+
+    if let Some(rest) = slice_after_case_insensitive(prompt, "tool:mcp") {
+        if has_tool(tools, "mcp.tool_call") {
+            let trimmed = rest.trim();
+            let (server_id, tool_name, arguments_json) = trimmed
+                .split_once("::")
+                .and_then(|(sid, tail)| {
+                    tail.split_once("::")
+                        .map(|(tool, args)| (sid.trim(), tool.trim(), args.trim()))
+                })
+                .unwrap_or(("mcp-000001", "echo", "{}"));
+            let args_value = serde_json::from_str::<Value>(arguments_json).unwrap_or_else(|_| json!({}));
+            return Some(ToolCall {
+                tool_call_id: None,
+                name: "mcp.tool_call".to_string(),
+                arguments_json: json!({
+                    "server_id": if server_id.is_empty() { "mcp-000001" } else { server_id },
+                    "tool_name": if tool_name.is_empty() { "echo" } else { tool_name },
+                    "arguments": args_value
+                })
+                .to_string(),
+            });
+        }
     }
 
     if let Some(rest) = slice_after_case_insensitive(prompt, "tool:activate") {

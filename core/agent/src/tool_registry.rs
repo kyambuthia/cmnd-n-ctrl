@@ -75,6 +75,11 @@ impl ToolRegistry {
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}".to_string(),
                 },
                 Tool {
+                    name: "mcp.tool_call".to_string(),
+                    description: "Call a tool on a running MCP server (consent required)".to_string(),
+                    input_json_schema: "{\"type\":\"object\",\"properties\":{\"server_id\":{\"type\":\"string\"},\"tool_name\":{\"type\":\"string\"},\"arguments\":{\"type\":\"object\"}},\"required\":[\"server_id\",\"tool_name\"],\"additionalProperties\":false}".to_string(),
+                },
+                Tool {
                     name: "desktop.open_url".to_string(),
                     description: "Open a URL using the platform shell (stubbed)".to_string(),
                     input_json_schema: "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}".to_string(),

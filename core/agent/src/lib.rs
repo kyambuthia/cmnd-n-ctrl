@@ -26,6 +26,7 @@ use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -44,7 +45,7 @@ pub struct AgentService {
     consent_counter: u64,
     session_counter: u64,
     mcp_counter: u64,
-    mcp_processes: RefCell<HashMap<String, McpRuntimeProcess>>,
+    mcp_processes: Rc<RefCell<HashMap<String, McpRuntimeProcess>>>,
 }
 
 struct McpRuntimeProcess {
@@ -153,7 +154,7 @@ impl AgentService {
             consent_counter: 0,
             session_counter: 0,
             mcp_counter: 0,
-            mcp_processes: RefCell::new(HashMap::new()),
+            mcp_processes: Rc::new(RefCell::new(HashMap::new())),
         };
         svc.hydrate_counters();
         let _ = svc.normalize_mcp_statuses_on_startup();
@@ -231,11 +232,22 @@ impl AgentService {
             .and_then(|s| s.open_path)
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from);
+        let mcp_processes = Rc::clone(&self.mcp_processes);
+        let mcp_invoker = Rc::new(move |server_id: &str, tool_name: &str, arguments_json: &str| {
+            let args_value = serde_json::from_str::<serde_json::Value>(arguments_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            let params_json = serde_json::json!({
+                "name": tool_name,
+                "arguments": args_value
+            })
+            .to_string();
+            mcp_runtime_request(&mcp_processes, server_id, "tools/call", &params_json)
+        });
         self.orchestrator = Orchestrator::new(
             Policy::default(),
             self.tool_registry.clone(),
             provider,
-            StubActionBackend::with_project_root(self.platform, project_root),
+            StubActionBackend::with_project_root(self.platform, project_root).with_mcp_invoker(mcp_invoker),
         );
     }
 
@@ -1093,56 +1105,65 @@ impl AgentService {
     }
 
     fn mcp_request(&self, server_id: &str, method: &str, params_json: &str) -> Result<String, String> {
-        let timeout = Duration::from_millis(800);
-        let deadline = Instant::now() + timeout;
-        let mut processes = self.mcp_processes.borrow_mut();
-        let runtime = processes
-            .get_mut(server_id)
-            .ok_or_else(|| "mcp server is not running".to_string())?;
-        let stdio = runtime
-            .stdio
-            .as_mut()
-            .ok_or_else(|| "mcp server stdio is unavailable".to_string())?;
+        mcp_runtime_request(&self.mcp_processes, server_id, method, params_json)
+    }
+}
 
-        stdio.next_request_id += 1;
-        let request_id = stdio.next_request_id;
-        let payload = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": serde_json::from_str::<serde_json::Value>(params_json)
-                .unwrap_or_else(|_| serde_json::json!({}))
-        })
-        .to_string();
-        stdio
-            .tx
-            .send(payload)
-            .map_err(|_| "failed to send mcp request to process".to_string())?;
+fn mcp_runtime_request(
+    processes: &Rc<RefCell<HashMap<String, McpRuntimeProcess>>>,
+    server_id: &str,
+    method: &str,
+    params_json: &str,
+) -> Result<String, String> {
+    let timeout = Duration::from_millis(800);
+    let deadline = Instant::now() + timeout;
+    let mut processes = processes.borrow_mut();
+    let runtime = processes
+        .get_mut(server_id)
+        .ok_or_else(|| "mcp server is not running".to_string())?;
+    let stdio = runtime
+        .stdio
+        .as_mut()
+        .ok_or_else(|| "mcp server stdio is unavailable".to_string())?;
 
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(format!("mcp request timeout waiting for {method} response"));
-            }
-            let remaining = deadline.saturating_duration_since(now);
-            let raw = stdio
-                .rx
-                .recv_timeout(remaining)
-                .map_err(|_| format!("mcp request timeout waiting for {method} response"))?;
-            let value = serde_json::from_str::<serde_json::Value>(&raw)
-                .map_err(|err| format!("invalid mcp jsonrpc response: {err}"))?;
-            let id = value.get("id").and_then(|v| v.as_u64());
-            if id != Some(request_id) {
-                continue;
-            }
-            if let Some(err) = value.get("error") {
-                return Err(format!("mcp {method} error: {err}"));
-            }
-            return Ok(value
-                .get("result")
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "null".to_string()));
+    stdio.next_request_id += 1;
+    let request_id = stdio.next_request_id;
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": serde_json::from_str::<serde_json::Value>(params_json)
+            .unwrap_or_else(|_| serde_json::json!({}))
+    })
+    .to_string();
+    stdio
+        .tx
+        .send(payload)
+        .map_err(|_| "failed to send mcp request to process".to_string())?;
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!("mcp request timeout waiting for {method} response"));
         }
+        let remaining = deadline.saturating_duration_since(now);
+        let raw = stdio
+            .rx
+            .recv_timeout(remaining)
+            .map_err(|_| format!("mcp request timeout waiting for {method} response"))?;
+        let value = serde_json::from_str::<serde_json::Value>(&raw)
+            .map_err(|err| format!("invalid mcp jsonrpc response: {err}"))?;
+        let id = value.get("id").and_then(|v| v.as_u64());
+        if id != Some(request_id) {
+            continue;
+        }
+        if let Some(err) = value.get("error") {
+            return Err(format!("mcp {method} error: {err}"));
+        }
+        return Ok(value
+            .get("result")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "null".to_string()));
     }
 }
 
@@ -1938,6 +1959,64 @@ sleep 1"#;
             .as_deref()
             .unwrap_or_default()
             .contains("\"opened\""));
+
+        let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chat_approve_executes_mcp_tool_call_via_action_backend() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let script = r#"p1='{"jsonrpc":"2.0","id":1,"result":{"server":"stub"}}'
+p2='{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"opened https://example.com"}]}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#p1}" "$p1"
+printf 'Content-Length: %s\r\n\r\n%s' "${#p2}" "$p2"
+sleep 1"#;
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "chat-mcp".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server record");
+
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start server");
+
+        let first = service.chat_request(ChatRequest {
+            session_id: None,
+            messages: vec![ipc::ChatMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "tool:mcp {}::browser.open::{{\"url\":\"https://example.com\"}}",
+                    server.id
+                ),
+            }],
+            provider_config: ipc::ProviderConfig {
+                provider_name: "openai-stub".to_string(),
+                model: None,
+                config_json: None,
+            },
+            mode: ipc::ChatMode::BestEffort,
+        });
+        assert!(first.consent_token.is_some());
+
+        let approved = service
+            .chat_approve(ChatApproveRequest {
+                consent_token: first.consent_token.expect("consent token"),
+            })
+            .expect("approve");
+        assert!(approved.actions_executed.iter().any(|a| a == "mcp.tool_call"));
+        assert!(approved
+            .executed_action_events
+            .iter()
+            .any(|e| e.tool_name == "mcp.tool_call" && e.status == "executed"));
 
         let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
     }

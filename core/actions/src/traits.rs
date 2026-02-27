@@ -1,5 +1,6 @@
 use ipc::{ToolCall, ToolResult};
 use serde_json::{json, Value};
+use std::rc::Rc;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,10 +10,21 @@ pub trait ActionBackend {
     fn execute_tool(&self, tool_call: &ToolCall) -> ToolResult;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StubActionBackend {
     platform: &'static str,
     project_root: Option<PathBuf>,
+    mcp_invoker: Option<Rc<dyn Fn(&str, &str, &str) -> Result<String, String>>>,
+}
+
+impl std::fmt::Debug for StubActionBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StubActionBackend")
+            .field("platform", &self.platform)
+            .field("project_root", &self.project_root)
+            .field("has_mcp_invoker", &self.mcp_invoker.is_some())
+            .finish()
+    }
 }
 
 impl StubActionBackend {
@@ -20,6 +32,7 @@ impl StubActionBackend {
         Self {
             platform,
             project_root: None,
+            mcp_invoker: None,
         }
     }
 
@@ -27,7 +40,16 @@ impl StubActionBackend {
         Self {
             platform,
             project_root,
+            mcp_invoker: None,
         }
+    }
+
+    pub fn with_mcp_invoker(
+        mut self,
+        mcp_invoker: Rc<dyn Fn(&str, &str, &str) -> Result<String, String>>,
+    ) -> Self {
+        self.mcp_invoker = Some(mcp_invoker);
+        self
     }
 
     fn scoped_path(&self, requested: Option<&str>) -> Result<PathBuf, String> {
@@ -623,6 +645,55 @@ impl ActionBackend for StubActionBackend {
                 evidence: crate::evidence::action_evidence(
                     format!("Created directory {}", path.display()),
                     format!("stub://{}/file.mkdir", self.platform),
+                ),
+            };
+        }
+
+        if tool_call.name == "mcp.tool_call" {
+            let server_id = args.get("server_id").and_then(Value::as_str).unwrap_or_default().trim();
+            let tool_name = args.get("tool_name").and_then(Value::as_str).unwrap_or_default().trim();
+            if server_id.is_empty() || tool_name.is_empty() {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    "invalid_arguments:server_id_and_tool_name_required",
+                    "mcp.tool_call",
+                    self.project_root_display(),
+                );
+            }
+            let arguments_json = args
+                .get("arguments")
+                .cloned()
+                .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string()))
+                .unwrap_or_else(|| "{}".to_string());
+            let Some(invoker) = &self.mcp_invoker else {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    "mcp_runtime_unavailable",
+                    "mcp.tool_call",
+                    server_id.to_string(),
+                );
+            };
+            let result_json = match invoker(server_id, tool_name, &arguments_json) {
+                Ok(result_json) => result_json,
+                Err(err) => {
+                    return tool_error(
+                        &tool_call.name,
+                        self.platform,
+                        format!("mcp_call_failed:{err}"),
+                        "mcp.tool_call",
+                        format!("{server_id}:{tool_name}"),
+                    )
+                }
+            };
+            return ToolResult {
+                tool_call_id: None,
+                name: tool_call.name.clone(),
+                result_json,
+                evidence: crate::evidence::action_evidence(
+                    format!("Called MCP tool '{tool_name}' on server '{server_id}'"),
+                    format!("mcp://{server_id}/tools/call/{tool_name}"),
                 ),
             };
         }
