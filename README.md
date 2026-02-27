@@ -34,4 +34,6 @@ See `docs/threat-model.md` and `docs/permissions-matrix.md` before enabling real
   - `ExecutionEvent`
   - `ExecutionFeedItem`
 - `ChatResponse::to_execution_feed_item(...)` converts orchestration output into a renderer-ready feed block model without changing orchestration behavior.
-- CLI/REPL rendering consumes this shared projection so interfaces can converge on consistent feed semantics while keeping business logic in core crates.
+- CLI/REPL/TUI rendering consumes this shared projection so interfaces converge on consistent feed semantics while keeping business logic in core crates.
+- TUI now renders an execution-feed list with collapsible details (`v`) and keyboard selection (`j`/`k`).
+- Desktop feed now supports searchable execution history plus one-click replay from prior prompts.
