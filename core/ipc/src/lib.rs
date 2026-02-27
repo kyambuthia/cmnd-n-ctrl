@@ -346,6 +346,40 @@ pub struct ActionEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionEventKind {
+    ExecutionStarted,
+    TokenStream,
+    ToolCallStarted,
+    ConsentRequested,
+    ToolCallCompleted,
+    ExecutionCompleted,
+    ExecutionFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionEvent {
+    pub kind: ExecutionEventKind,
+    pub text: Option<String>,
+    pub tool_name: Option<String>,
+    pub capability_tier: Option<String>,
+    pub status: Option<String>,
+    pub metadata_json: Option<JsonBlob>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionFeedItem {
+    pub execution_id: String,
+    pub session_id: Option<String>,
+    pub status: String,
+    pub user_prompt: Option<String>,
+    pub assistant_text: String,
+    pub consent_request: Option<ConsentRequest>,
+    pub proposed_actions: Vec<ActionEvent>,
+    pub executed_action_events: Vec<ActionEvent>,
+    pub events: Vec<ExecutionEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsentRequest {
     pub scope: String,
     pub human_summary: String,
@@ -370,6 +404,72 @@ pub struct ChatResponse {
     pub proposed_actions: Vec<ActionEvent>,
     pub executed_action_events: Vec<ActionEvent>,
     pub action_events: Vec<ActionEvent>,
+}
+
+impl ChatResponse {
+    pub fn to_execution_feed_item(&self, user_prompt: Option<String>) -> ExecutionFeedItem {
+        let mut events = Vec::new();
+        events.push(ExecutionEvent {
+            kind: ExecutionEventKind::ExecutionStarted,
+            text: user_prompt.clone(),
+            tool_name: None,
+            capability_tier: None,
+            status: Some("started".to_string()),
+            metadata_json: None,
+        });
+
+        for evt in &self.proposed_actions {
+            let kind = if evt.status == "consent_required" {
+                ExecutionEventKind::ConsentRequested
+            } else {
+                ExecutionEventKind::ToolCallStarted
+            };
+            events.push(ExecutionEvent {
+                kind,
+                text: evt.reason.clone().or_else(|| evt.arguments_preview.clone()),
+                tool_name: Some(evt.tool_name.clone()),
+                capability_tier: Some(evt.capability_tier.clone()),
+                status: Some(evt.status.clone()),
+                metadata_json: None,
+            });
+        }
+        for evt in &self.executed_action_events {
+            events.push(ExecutionEvent {
+                kind: ExecutionEventKind::ToolCallCompleted,
+                text: evt.evidence_summary.clone(),
+                tool_name: Some(evt.tool_name.clone()),
+                capability_tier: Some(evt.capability_tier.clone()),
+                status: Some(evt.status.clone()),
+                metadata_json: None,
+            });
+        }
+
+        let terminal_kind = if self.execution_state == "denied" {
+            ExecutionEventKind::ExecutionFailed
+        } else {
+            ExecutionEventKind::ExecutionCompleted
+        };
+        events.push(ExecutionEvent {
+            kind: terminal_kind,
+            text: Some(self.final_text.clone()),
+            tool_name: None,
+            capability_tier: None,
+            status: Some(self.execution_state.clone()),
+            metadata_json: None,
+        });
+
+        ExecutionFeedItem {
+            execution_id: self.audit_id.clone(),
+            session_id: self.session_id.clone(),
+            status: self.execution_state.clone(),
+            user_prompt,
+            assistant_text: self.final_text.clone(),
+            consent_request: self.consent_request.clone(),
+            proposed_actions: self.proposed_actions.clone(),
+            executed_action_events: self.executed_action_events.clone(),
+            events,
+        }
+    }
 }
 
 pub trait ChatService {

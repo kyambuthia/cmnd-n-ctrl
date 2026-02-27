@@ -6,7 +6,7 @@ use std::net::{TcpListener, TcpStream};
 
 use agent::AgentService;
 use ipc::jsonrpc::{Id, Request};
-use ipc::{mcp, ChatApproveRequest, ChatDenyRequest, ChatMode, ChatRequest, ChatResponse, JsonRpcClient, JsonRpcServer, ProviderConfig, Tool};
+use ipc::{mcp, ChatApproveRequest, ChatDenyRequest, ChatMode, ChatRequest, ChatResponse, ExecutionFeedItem, JsonRpcClient, JsonRpcServer, ProviderConfig, Tool};
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -565,23 +565,8 @@ fn print_repl_consents(records: &Value) {
 }
 
 fn print_repl_chat_response(response: &ChatResponse) {
-    println!("assistant> {}", response.final_text);
-    println!("system> state={}", response.execution_state);
-    if let Some(token) = &response.consent_token {
-        println!("system> consent_token={token}");
-    }
-    if !response.proposed_actions.is_empty() {
-        println!("system> proposed:");
-        for evt in &response.proposed_actions {
-            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-        }
-    }
-    if !response.executed_action_events.is_empty() {
-        println!("system> executed:");
-        for evt in &response.executed_action_events {
-            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-        }
-    }
+    let feed_item = response.to_execution_feed_item(None);
+    print_feed_item(&feed_item, response.consent_token.as_deref());
 }
 
 fn local_rpc<T>(client: &mut JsonRpcClient<AgentService>, method: &str, params: Value) -> Result<T, String>
@@ -1139,74 +1124,38 @@ fn print_chat_response(response: &ChatResponse, json_output: bool) {
         );
         return;
     }
+    let feed_item = response.to_execution_feed_item(None);
+    print_feed_item(&feed_item, response.consent_token.as_deref());
+}
 
-    println!("audit_id: {}", response.audit_id);
-    println!("request_fingerprint: {}", response.request_fingerprint);
-    println!("execution_state: {}", response.execution_state);
-    if let Some(consent_token) = &response.consent_token {
-        println!("consent_token: {}", consent_token);
+fn print_feed_item(item: &ExecutionFeedItem, consent_token: Option<&str>) {
+    println!("execution_id: {}", item.execution_id);
+    println!("status: {}", item.status);
+    if let Some(session_id) = &item.session_id {
+        println!("session: {}", session_id);
     }
-    if let Some(consent) = &response.consent_request {
-        println!("consent.scope: {}", consent.scope);
-        println!("consent.summary: {}", consent.human_summary);
-        if let Some(ttl) = consent.ttl_seconds {
-            println!("consent.ttl_seconds: {}", ttl);
-        }
-        if let Some(expires_at) = consent.expires_at_unix_seconds {
-            println!("consent.expires_at_unix_seconds: {}", expires_at);
-        }
-        println!(
-            "consent.requires_extra_confirmation_click: {}",
-            consent.requires_extra_confirmation_click
-        );
-        if !consent.risk_factors.is_empty() {
-            println!("consent.risk_factors: {}", consent.risk_factors.join(", "));
-        }
+    if let Some(token) = consent_token {
+        println!("consent_token: {}", token);
     }
-    println!("actions: {}", response.actions_executed.join(", "));
-    if !response.proposed_actions.is_empty() {
-        println!("proposed_actions:");
-        for evt in &response.proposed_actions {
-            let mut line = format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-            if let Some(reason) = &evt.reason {
-                line.push_str(&format!(" reason={}", reason));
-            }
-            if let Some(args) = &evt.arguments_preview {
-                line.push_str(&format!(" args={}", args));
-            }
-            println!("{line}");
+    if let Some(prompt) = &item.user_prompt {
+        println!("you> {}", prompt);
+    }
+    println!("assistant> {}", item.assistant_text);
+    if let Some(consent) = &item.consent_request {
+        println!("consent: {}", consent.human_summary);
+    }
+    if !item.proposed_actions.is_empty() {
+        println!("proposed:");
+        for evt in &item.proposed_actions {
+            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
         }
     }
-    if !response.executed_action_events.is_empty() {
-        println!("executed_action_events:");
-        for evt in &response.executed_action_events {
-            let mut line = format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-            if let Some(args) = &evt.arguments_preview {
-                line.push_str(&format!(" args={}", args));
-            }
-            if let Some(evidence) = &evt.evidence_summary {
-                line.push_str(&format!(" evidence={}", evidence));
-            }
-            println!("{line}");
+    if !item.executed_action_events.is_empty() {
+        println!("executed:");
+        for evt in &item.executed_action_events {
+            println!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
         }
     }
-    if !response.action_events.is_empty() {
-        println!("action_events:");
-        for evt in &response.action_events {
-            let mut line = format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status);
-            if let Some(reason) = &evt.reason {
-                line.push_str(&format!(" reason={}", reason));
-            }
-            if let Some(args) = &evt.arguments_preview {
-                line.push_str(&format!(" args={}", args));
-            }
-            if let Some(evidence) = &evt.evidence_summary {
-                line.push_str(&format!(" evidence={}", evidence));
-            }
-            println!("{line}");
-        }
-    }
-    println!("response: {}", response.final_text);
 }
 
 fn call_http_jsonrpc(addr: &str, method: &str, params: Value) -> io::Result<WireResponse> {

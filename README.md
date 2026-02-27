@@ -27,3 +27,11 @@ See `docs/threat-model.md` and `docs/permissions-matrix.md` before enabling real
 ## Product Roadmap
 - See `docs/ROADMAP.md` for the phased plan to ship a useful Windows/Linux desktop operator agent (browser + file workflows first, desktop app automation next).
 - See `docs/TOOLS-ROADMAP.md` for the tool surface expansion plan (read-only, local actions, browser, desktop automation).
+
+## Execution Feed Model
+- Shared execution feed projection types live in `core/ipc`:
+  - `ExecutionEventKind`
+  - `ExecutionEvent`
+  - `ExecutionFeedItem`
+- `ChatResponse::to_execution_feed_item(...)` converts orchestration output into a renderer-ready feed block model without changing orchestration behavior.
+- CLI/REPL rendering consumes this shared projection so interfaces can converge on consistent feed semantics while keeping business logic in core crates.
