@@ -52,16 +52,16 @@ struct TuiApp {
 
 fn pane_title(base: &str, focused: bool) -> String {
     if focused {
-        format!("{} *", base)
+        format!("[{}]", base)
     } else {
         base.to_string()
     }
 }
 
 fn focused_block<'a>(title: String, focused: bool) -> Block<'a> {
-    let border = if focused { Color::Yellow } else { Color::DarkGray };
+    let border = if focused { Color::Gray } else { Color::DarkGray };
     Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP)
         .border_style(Style::default().fg(border))
         .title(title)
 }
@@ -187,9 +187,9 @@ fn render(frame: &mut Frame, app: &TuiApp) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(18),
-            Constraint::Percentage(64),
-            Constraint::Percentage(18),
+            Constraint::Percentage(12),
+            Constraint::Percentage(76),
+            Constraint::Percentage(12),
         ])
         .split(outer[0]);
 
@@ -207,11 +207,11 @@ fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp)
             .get(app.selected_session)
             .map(|s| format!("{} ({})", s.id, s.message_count))
             .unwrap_or_else(|| "(none)".to_string());
-        let summary = Paragraph::new(vec![
-            Line::from("session"),
-            Line::from(selected),
-            Line::from(format!("total={}", app.sessions.len())),
-        ])
+        let summary = Paragraph::new(vec![Line::from(format!(
+            "s:{} / {}",
+            selected,
+            app.sessions.len()
+        ))])
         .block(focused_block("Session".to_string(), false))
         .wrap(Wrap { trim: true });
         frame.render_widget(summary, area);
@@ -311,11 +311,12 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
             .get(app.selected_audit)
             .map(|a| a.audit_id.clone())
             .unwrap_or_else(|| "(none)".to_string());
-        let summary = Paragraph::new(vec![
-            Line::from(format!("consents={}", app.consents.len())),
-            Line::from(format!("audits={}", app.audits.len())),
-            Line::from(format!("latest={}", latest_audit)),
-        ])
+        let summary = Paragraph::new(vec![Line::from(format!(
+            "c:{} a:{} {}",
+            app.consents.len(),
+            app.audits.len(),
+            latest_audit
+        ))])
         .block(focused_block("Meta".to_string(), false))
         .wrap(Wrap { trim: true });
         frame.render_widget(summary, area);
@@ -381,7 +382,7 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
 
 fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     let title = format!(
-        "Input [{}] provider={} session={} (Enter send, Tab pane, n new, a/d consent)",
+        "input [{}] {} {}",
         if app.require_confirmation {
             "confirm"
         } else {
@@ -403,7 +404,7 @@ fn render_status(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         FocusPane::Consents => "consent",
         FocusPane::Audit => "audit",
     };
-    let status = Paragraph::new(format!("pane={pane} | {}", app.status))
+    let status = Paragraph::new(format!("{pane} | {}", app.status))
         .style(Style::default().fg(Color::Gray).add_modifier(Modifier::DIM));
     frame.render_widget(status, area);
 }
