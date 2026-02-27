@@ -98,6 +98,10 @@ impl ToolRegistry {
         }
     }
 
+    pub fn from_tools(tools: Vec<Tool>) -> Self {
+        Self { tools }
+    }
+
     pub fn list(&self) -> Vec<Tool> {
         self.tools.clone()
     }

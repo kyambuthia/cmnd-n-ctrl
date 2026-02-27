@@ -117,6 +117,7 @@ impl McpStdioClient {
 
 impl AgentService {
     const CONSENT_TTL_SECS: u64 = 300;
+    const MCP_TOOL_ALIAS_PREFIX: &'static str = "mcp.server.";
 
     pub fn new_for_platform(platform: &'static str) -> Self {
         Self::new_for_platform_with_storage(platform, None)
@@ -243,9 +244,12 @@ impl AgentService {
             .to_string();
             mcp_runtime_request(&mcp_processes, server_id, "tools/call", &params_json)
         });
+        let mut tools = self.tool_registry.list();
+        tools.extend(self.dynamic_mcp_tools());
+        let merged_tool_registry = ToolRegistry::from_tools(tools);
         self.orchestrator = Orchestrator::new(
             Policy::default(),
-            self.tool_registry.clone(),
+            merged_tool_registry,
             provider,
             StubActionBackend::with_project_root(self.platform, project_root).with_mcp_invoker(mcp_invoker),
         );
@@ -484,6 +488,35 @@ impl AgentService {
                     .filter(|s| !s.trim().is_empty());
             }
         }
+    }
+
+    fn dynamic_mcp_tools(&self) -> Vec<Tool> {
+        let _ = self.refresh_mcp_runtime_statuses();
+        let Ok(servers) = self.storage.read_mcp_servers().map_err(Self::io_err) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for server in servers.into_iter().filter(|s| s.status == "running") {
+            let Ok(result_json) = self.mcp_request(&server.id, "tools/list", "{}") else {
+                continue;
+            };
+            for mut tool in parse_mcp_tools_list_result(&result_json) {
+                let original_name = tool.name;
+                tool.name = format!(
+                    "{}{}.{}",
+                    Self::MCP_TOOL_ALIAS_PREFIX,
+                    server.id,
+                    original_name
+                );
+                tool.description = if tool.description.trim().is_empty() {
+                    format!("MCP tool '{}' from server '{}'", original_name, server.name)
+                } else {
+                    format!("{} [MCP:{}]", tool.description, server.name)
+                };
+                out.push(tool);
+            }
+        }
+        out
     }
 }
 
@@ -955,7 +988,9 @@ impl ChatService for AgentService {
     }
 
     fn tools_list(&self) -> Vec<Tool> {
-        self.tool_registry.list()
+        let mut tools = self.tool_registry.list();
+        tools.extend(self.dynamic_mcp_tools());
+        tools
     }
 
     fn system_health(&self) -> Result<SystemHealthResponse, String> {
@@ -2017,6 +2052,39 @@ sleep 1"#;
             .executed_action_events
             .iter()
             .any(|e| e.tool_name == "mcp.tool_call" && e.status == "executed"));
+
+        let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tools_list_includes_dynamic_mcp_server_alias_tools() {
+        let dir = tempdir().expect("tempdir");
+        let mut service = AgentService::new_for_platform_with_storage_dir("test", dir.path());
+
+        let script = r#"p1='{"jsonrpc":"2.0","id":1,"result":{"server":"stub"}}'
+p2='{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"browser.open","description":"Open page","inputSchema":{"type":"object","properties":{"url":{"type":"string"}}}}]}}'
+printf 'Content-Length: %s\r\n\r\n%s' "${#p1}" "$p1"
+printf 'Content-Length: %s\r\n\r\n%s' "${#p2}" "$p2"
+sleep 1"#;
+        let added = service
+            .mcp_servers_add(McpServerAddRequest {
+                name: "toolcatalog".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            })
+            .expect("add mcp server");
+        let server = added.server.expect("server");
+        service
+            .mcp_servers_start(McpServerStateRequest {
+                server_id: server.id.clone(),
+            })
+            .expect("start");
+
+        let tools = service.tools_list();
+        assert!(tools
+            .iter()
+            .any(|t| t.name == format!("mcp.server.{}.browser.open", server.id)));
 
         let _ = service.mcp_servers_stop(McpServerStateRequest { server_id: server.id });
     }

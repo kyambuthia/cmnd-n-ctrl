@@ -698,6 +698,49 @@ impl ActionBackend for StubActionBackend {
             };
         }
 
+        if let Some(rest) = tool_call.name.strip_prefix("mcp.server.") {
+            let Some((server_id, tool_name)) = rest.split_once('.') else {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    "invalid_tool_name:mcp_server_alias".to_string(),
+                    "mcp.server.*",
+                    rest.to_string(),
+                );
+            };
+            let Some(invoker) = &self.mcp_invoker else {
+                return tool_error(
+                    &tool_call.name,
+                    self.platform,
+                    "mcp_runtime_unavailable",
+                    "mcp.server.*",
+                    server_id.to_string(),
+                );
+            };
+            let arguments_json = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+            let result_json = match invoker(server_id, tool_name, &arguments_json) {
+                Ok(result_json) => result_json,
+                Err(err) => {
+                    return tool_error(
+                        &tool_call.name,
+                        self.platform,
+                        format!("mcp_call_failed:{err}"),
+                        "mcp.server.*",
+                        format!("{server_id}:{tool_name}"),
+                    )
+                }
+            };
+            return ToolResult {
+                tool_call_id: None,
+                name: tool_call.name.clone(),
+                result_json,
+                evidence: crate::evidence::action_evidence(
+                    format!("Called MCP alias '{tool_name}' on server '{server_id}'"),
+                    format!("mcp://{server_id}/tools/call/{tool_name}"),
+                ),
+            };
+        }
+
         if tool_call.name == "desktop.open_url" {
             let url = args.get("url").and_then(Value::as_str).unwrap_or("about:blank");
             return ToolResult {
@@ -771,6 +814,55 @@ impl ActionBackend for StubActionBackend {
                 format!("stub://{}/{}", self.platform, tool_call.name),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_tool_call_uses_invoker() {
+        let backend = StubActionBackend::new("test").with_mcp_invoker(Rc::new(|server, tool, args| {
+            Ok(json!({
+                "server": server,
+                "tool": tool,
+                "args": serde_json::from_str::<Value>(args).unwrap_or_else(|_| json!({}))
+            })
+            .to_string())
+        }));
+        let result = backend.execute_tool(&ToolCall {
+            tool_call_id: None,
+            name: "mcp.tool_call".to_string(),
+            arguments_json: json!({
+                "server_id": "mcp-1",
+                "tool_name": "browser.open",
+                "arguments": { "url": "https://example.com" }
+            })
+            .to_string(),
+        });
+        assert!(result.result_json.contains("\"server\":\"mcp-1\""));
+        assert!(result.result_json.contains("\"tool\":\"browser.open\""));
+    }
+
+    #[test]
+    fn mcp_server_alias_uses_invoker() {
+        let backend = StubActionBackend::new("test").with_mcp_invoker(Rc::new(|server, tool, args| {
+            Ok(json!({
+                "server": server,
+                "tool": tool,
+                "args": serde_json::from_str::<Value>(args).unwrap_or_else(|_| json!({}))
+            })
+            .to_string())
+        }));
+        let result = backend.execute_tool(&ToolCall {
+            tool_call_id: None,
+            name: "mcp.server.mcp-1.browser.open".to_string(),
+            arguments_json: json!({ "url": "https://example.com" }).to_string(),
+        });
+        assert!(result.result_json.contains("\"server\":\"mcp-1\""));
+        assert!(result.result_json.contains("\"tool\":\"browser.open\""));
+        assert!(result.result_json.contains("\"url\":\"https://example.com\""));
     }
 }
 
