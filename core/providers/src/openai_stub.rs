@@ -38,10 +38,133 @@ impl Provider for OpenAiStubProvider {
 }
 
 fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
-    if !prompt.contains("tool:") {
-        return None;
+    if let Some(call) = select_natural_language_tool_call(prompt, tools) {
+        return Some(call);
+    }
+    if prompt.to_ascii_lowercase().contains("tool:") {
+        return select_legacy_tool_syntax_call(prompt, tools);
+    }
+    None
+}
+
+fn select_natural_language_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
+    if has_tool(tools, "desktop.open_url") {
+        if let Some(url) = extract_url(prompt) {
+            let lower = prompt.to_ascii_lowercase();
+            if lower.contains("open")
+                || lower.contains("launch")
+                || lower.contains("navigate")
+                || lower.contains("visit")
+            {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "desktop.open_url".to_string(),
+                    arguments_json: json!({ "url": url }).to_string(),
+                });
+            }
+        }
     }
 
+    if has_tool(tools, "desktop.app.activate") {
+        if let Some(rest) = slice_after_case_insensitive(prompt, "activate ") {
+            let app = rest.trim();
+            if !app.is_empty() {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "desktop.app.activate".to_string(),
+                    arguments_json: json!({ "app": app }).to_string(),
+                });
+            }
+        }
+        if let Some(rest) = slice_after_case_insensitive(prompt, "focus ") {
+            let app = rest.trim();
+            if !app.is_empty() {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "desktop.app.activate".to_string(),
+                    arguments_json: json!({ "app": app }).to_string(),
+                });
+            }
+        }
+    }
+
+    if has_tool(tools, "file.list") {
+        let lower = prompt.to_ascii_lowercase();
+        if lower.contains("list files") || lower.contains("show files") || lower.contains("what files") {
+            return Some(ToolCall {
+                tool_call_id: None,
+                name: "file.list".to_string(),
+                arguments_json: json!({ "path": "." }).to_string(),
+            });
+        }
+    }
+
+    if has_tool(tools, "file.read_text") {
+        if let Some(rest) = slice_after_case_insensitive(prompt, "read file ") {
+            let path = first_token(rest);
+            if !path.is_empty() {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "file.read_text".to_string(),
+                    arguments_json: json!({ "path": path }).to_string(),
+                });
+            }
+        }
+    }
+
+    if has_tool(tools, "file.mkdir") {
+        if let Some(rest) = slice_after_case_insensitive(prompt, "create directory ") {
+            let path = rest.trim();
+            if !path.is_empty() {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "file.mkdir".to_string(),
+                    arguments_json: json!({ "path": path }).to_string(),
+                });
+            }
+        }
+        if let Some(rest) = slice_after_case_insensitive(prompt, "create folder ") {
+            let path = rest.trim();
+            if !path.is_empty() {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "file.mkdir".to_string(),
+                    arguments_json: json!({ "path": path }).to_string(),
+                });
+            }
+        }
+    }
+
+    if has_tool(tools, "mcp.tool_call") {
+        let lower = prompt.to_ascii_lowercase();
+        if lower.contains("mcp") && lower.contains("server") && lower.contains("tool") {
+            let server_id = token_after(prompt, "server").unwrap_or("mcp-000001");
+            let tool_name = token_after(prompt, "tool").unwrap_or("echo");
+            return Some(ToolCall {
+                tool_call_id: None,
+                name: "mcp.tool_call".to_string(),
+                arguments_json: json!({
+                    "server_id": server_id,
+                    "tool_name": tool_name,
+                    "arguments": {}
+                })
+                .to_string(),
+            });
+        }
+    }
+
+    if prompt.to_ascii_lowercase().contains("what time") && has_tool(tools, "time.now") {
+        return Some(ToolCall {
+            tool_call_id: None,
+            name: "time.now".to_string(),
+            arguments_json: "{}".to_string(),
+        });
+    }
+
+    None
+}
+
+fn select_legacy_tool_syntax_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
     if let Some(rest) = slice_after_case_insensitive(prompt, "tool:open") {
         if has_tool(tools, "desktop.open_url") {
             let url = rest.trim();
@@ -280,15 +403,7 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
         });
     }
 
-    let first_tool = tools
-        .first()
-        .map(|t| t.name.clone())
-        .unwrap_or_else(|| "echo".to_string());
-    Some(ToolCall {
-        tool_call_id: None,
-        name: first_tool,
-        arguments_json: json!({ "input": "stub" }).to_string(),
-    })
+    None
 }
 
 fn has_tool(tools: &[Tool], name: &str) -> bool {
@@ -299,4 +414,56 @@ fn slice_after_case_insensitive<'a>(haystack: &'a str, needle: &str) -> Option<&
     let lower = haystack.to_ascii_lowercase();
     let idx = lower.find(&needle.to_ascii_lowercase())?;
     Some(&haystack[idx + needle.len()..])
+}
+
+fn extract_url(input: &str) -> Option<String> {
+    input
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c: char| ",.!?\"'()[]{}".contains(c)))
+        .find(|t| t.starts_with("https://") || t.starts_with("http://"))
+        .map(|s| s.to_string())
+}
+
+fn first_token(input: &str) -> String {
+    input
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(|c: char| ",.!?\"'()[]{}".contains(c))
+        .to_string()
+}
+
+fn token_after<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
+    let lower = input.to_ascii_lowercase();
+    let needle = format!("{keyword} ");
+    let idx = lower.find(&needle)?;
+    input[idx + needle.len()..].split_whitespace().next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str) -> Tool {
+        Tool {
+            name: name.to_string(),
+            description: "".to_string(),
+            input_json_schema: "{}".to_string(),
+        }
+    }
+
+    #[test]
+    fn natural_language_open_url_maps_to_desktop_tool() {
+        let tools = vec![tool("desktop.open_url")];
+        let call = select_stub_tool_call("Please open https://example.com for me", &tools).expect("tool call");
+        assert_eq!(call.name, "desktop.open_url");
+        assert!(call.arguments_json.contains("https://example.com"));
+    }
+
+    #[test]
+    fn legacy_tool_syntax_still_supported_for_non_ui_callers() {
+        let tools = vec![tool("desktop.open_url")];
+        let call = select_stub_tool_call("tool:open https://example.com", &tools).expect("tool call");
+        assert_eq!(call.name, "desktop.open_url");
+    }
 }

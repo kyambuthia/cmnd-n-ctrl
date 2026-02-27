@@ -133,6 +133,10 @@ fn main() {
                 print_help();
                 std::process::exit(2);
             }
+            if contains_tool_syntax(&args[1]) {
+                eprintln!("error: explicit tool syntax is disabled; use natural language prompts");
+                std::process::exit(2);
+            }
             let mut provider_name = "openai-stub".to_string();
             let mut require_confirmation = false;
             let mut json_output = false;
@@ -345,6 +349,10 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+fn contains_tool_syntax(input: &str) -> bool {
+    input.to_ascii_lowercase().contains("tool:")
 }
 
 fn serve_stdio_jsonrpc() -> io::Result<()> {

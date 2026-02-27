@@ -486,6 +486,10 @@ fn send_chat(client: &mut JsonRpcClient<AgentService>, app: &mut TuiApp) -> Resu
         app.set_status("Input is empty");
         return Ok(());
     }
+    if app.chat_input.to_ascii_lowercase().contains("tool:") {
+        app.set_status("Use natural language only (explicit tool: syntax disabled)");
+        return Ok(());
+    }
     if app.current_session_id().is_none() {
         create_session(client, app)?;
     }
