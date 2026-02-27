@@ -48,9 +48,33 @@ fn select_stub_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
 }
 
 fn select_natural_language_tool_call(prompt: &str, tools: &[Tool]) -> Option<ToolCall> {
+    let lower = prompt.to_ascii_lowercase();
+
+    if has_tool(tools, "desktop.app.list") {
+        if lower.contains("list apps")
+            || lower.contains("list applications")
+            || lower.contains("show apps")
+            || lower.contains("show applications")
+            || lower.contains("running apps")
+        {
+            return Some(ToolCall {
+                tool_call_id: None,
+                name: "desktop.app.list".to_string(),
+                arguments_json: json!({ "filter": "" }).to_string(),
+            });
+        }
+    }
+
+    if has_tool(tools, "desktop.app.activate") && (lower.contains("open browser") || lower.contains("launch browser")) {
+        return Some(ToolCall {
+            tool_call_id: None,
+            name: "desktop.app.activate".to_string(),
+            arguments_json: json!({ "app": "Browser" }).to_string(),
+        });
+    }
+
     if has_tool(tools, "desktop.open_url") {
         if let Some(url) = extract_url(prompt) {
-            let lower = prompt.to_ascii_lowercase();
             if lower.contains("open")
                 || lower.contains("launch")
                 || lower.contains("navigate")
@@ -66,6 +90,16 @@ fn select_natural_language_tool_call(prompt: &str, tools: &[Tool]) -> Option<Too
     }
 
     if has_tool(tools, "desktop.app.activate") {
+        if let Some(rest) = slice_after_case_insensitive(prompt, "switch to ") {
+            let app = rest.trim();
+            if !app.is_empty() {
+                return Some(ToolCall {
+                    tool_call_id: None,
+                    name: "desktop.app.activate".to_string(),
+                    arguments_json: json!({ "app": app }).to_string(),
+                });
+            }
+        }
         if let Some(rest) = slice_after_case_insensitive(prompt, "activate ") {
             let app = rest.trim();
             if !app.is_empty() {
@@ -89,7 +123,6 @@ fn select_natural_language_tool_call(prompt: &str, tools: &[Tool]) -> Option<Too
     }
 
     if has_tool(tools, "file.list") {
-        let lower = prompt.to_ascii_lowercase();
         if lower.contains("list files") || lower.contains("show files") || lower.contains("what files") {
             return Some(ToolCall {
                 tool_call_id: None,
@@ -136,7 +169,6 @@ fn select_natural_language_tool_call(prompt: &str, tools: &[Tool]) -> Option<Too
     }
 
     if has_tool(tools, "mcp.tool_call") {
-        let lower = prompt.to_ascii_lowercase();
         if lower.contains("mcp") && lower.contains("server") && lower.contains("tool") {
             let server_id = token_after(prompt, "server").unwrap_or("mcp-000001");
             let tool_name = token_after(prompt, "tool").unwrap_or("echo");
@@ -458,6 +490,21 @@ mod tests {
         let call = select_stub_tool_call("Please open https://example.com for me", &tools).expect("tool call");
         assert_eq!(call.name, "desktop.open_url");
         assert!(call.arguments_json.contains("https://example.com"));
+    }
+
+    #[test]
+    fn natural_language_list_apps_maps_to_desktop_app_list() {
+        let tools = vec![tool("desktop.app.list")];
+        let call = select_stub_tool_call("Can you list applications running?", &tools).expect("tool call");
+        assert_eq!(call.name, "desktop.app.list");
+    }
+
+    #[test]
+    fn natural_language_switch_to_maps_to_desktop_activate() {
+        let tools = vec![tool("desktop.app.activate")];
+        let call = select_stub_tool_call("switch to Firefox", &tools).expect("tool call");
+        assert_eq!(call.name, "desktop.app.activate");
+        assert!(call.arguments_json.contains("Firefox"));
     }
 
     #[test]
