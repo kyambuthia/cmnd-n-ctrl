@@ -58,10 +58,16 @@
       }
       .shell {
         display: grid;
-        grid-template-columns: 250px minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
         min-height: 80vh;
       }
+      .shell.controls-open {
+        grid-template-columns: 250px minmax(0, 1fr);
+      }
       .shell.debug-open {
+        grid-template-columns: minmax(0, 1fr) 320px;
+      }
+      .shell.controls-open.debug-open {
         grid-template-columns: 250px minmax(0, 1fr) 320px;
       }
       .sidebar,
@@ -69,10 +75,13 @@
         background: var(--panel-3);
       }
       .sidebar {
-        display: block;
+        display: none;
         border-right: 1px solid var(--border);
         padding: 0.6rem;
         overflow: auto;
+      }
+      .shell.controls-open .sidebar {
+        display: block;
       }
       .inspector {
         display: none;
@@ -461,6 +470,7 @@
           </div>
         </div>
         <div class="row" style="margin-top:0;">
+          <button id="controlsToggle" class="icon-btn" type="button" aria-pressed="false">Controls</button>
           <button id="debugToggle" class="icon-btn" type="button" aria-pressed="false">Debug</button>
           <div id="transportBadge" class="transport">transport: booting</div>
         </div>

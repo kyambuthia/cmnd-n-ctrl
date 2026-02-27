@@ -11,6 +11,7 @@ const actionChipsEl = document.querySelector('#actionChips');
 const rawEl = document.querySelector('#raw');
 const statusEl = document.querySelector('#status');
 const shellEl = document.querySelector('.shell');
+const controlsToggleBtn = document.querySelector('#controlsToggle');
 const transportBadgeEl = document.querySelector('#transportBadge');
 const debugToggleBtn = document.querySelector('#debugToggle');
 const requireConfirmationEl = document.querySelector('#requireConfirmation');
@@ -913,6 +914,14 @@ debugToggleBtn.addEventListener('click', () => {
   debugToggleBtn.textContent = isOpen ? 'Debug On' : 'Debug';
 });
 
+if (controlsToggleBtn) {
+  controlsToggleBtn.addEventListener('click', () => {
+    const isOpen = shellEl.classList.toggle('controls-open');
+    controlsToggleBtn.setAttribute('aria-pressed', String(isOpen));
+    controlsToggleBtn.textContent = isOpen ? 'Controls On' : 'Controls';
+  });
+}
+
 promptEl.addEventListener('keydown', async (event) => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
@@ -924,6 +933,10 @@ promptEl.addEventListener('keydown', async (event) => {
     event.preventDefault();
     promptEl.value = '';
     setStatus('Prompt cleared');
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+    event.preventDefault();
+    if (controlsToggleBtn) controlsToggleBtn.click();
   }
 });
 
