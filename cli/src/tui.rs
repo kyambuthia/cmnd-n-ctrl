@@ -9,6 +9,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::layout::Rect;
 use ratatui::{Frame, Terminal};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -227,7 +228,13 @@ fn render(frame: &mut Frame, app: &TuiApp) {
         render_right(frame, columns[2], app);
     }
 
-    render_input(frame, outer[1], app);
+    let full_width_input = Rect {
+        x: frame.area().x,
+        y: outer[1].y,
+        width: frame.area().width,
+        height: outer[1].height,
+    };
+    render_input(frame, full_width_input, app);
     render_status(frame, outer[2], app);
 }
 
