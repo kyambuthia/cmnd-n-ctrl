@@ -3,6 +3,7 @@ const currentActionLabelEl = document.querySelector('#currentActionLabel');
 const currentActionBodyEl = document.querySelector('#currentActionBody');
 const currentActionMetaEl = document.querySelector('#currentActionMeta');
 const activityHistoryEl = document.querySelector('#activityHistory');
+const historySearchEl = document.querySelector('#historySearch');
 const auditEl = document.querySelector('#audit');
 const workspaceStateEl = document.querySelector('#workspaceState');
 const actionsEl = document.querySelector('#actions');
@@ -42,6 +43,7 @@ let consentApprovalArmed = false;
 let pendingConsentFingerprint = null;
 let pendingConsentToken = null;
 let pendingConsentMeta = null;
+let historyFilter = '';
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -84,6 +86,15 @@ function clearHistory() {
   `;
 }
 
+function applyHistoryFilter() {
+  const q = historyFilter.trim().toLowerCase();
+  const items = Array.from(activityHistoryEl.querySelectorAll('.history-item'));
+  for (const item of items) {
+    const haystack = (item.dataset.search || item.textContent || '').toLowerCase();
+    item.classList.toggle('hidden', q.length > 0 && !haystack.includes(q));
+  }
+}
+
 function pushHistory(kind, label, body, details = {}) {
   const item = document.createElement('div');
   item.className = 'history-item';
@@ -103,13 +114,39 @@ function pushHistory(kind, label, body, details = {}) {
   text.textContent = body;
 
   item.append(meta, text);
+  const detailBits = [];
+  if (details.executionId) detailBits.push(`execution: ${details.executionId}`);
+  if (details.sessionId) detailBits.push(`session: ${details.sessionId}`);
+  if (Array.isArray(details.proposed) && details.proposed.length) {
+    detailBits.push(`proposed: ${details.proposed.join(', ')}`);
+  }
+  if (Array.isArray(details.executed) && details.executed.length) {
+    detailBits.push(`executed: ${details.executed.join(', ')}`);
+  }
+  if (Array.isArray(details.risks) && details.risks.length) {
+    detailBits.push(`risk: ${details.risks.join(', ')}`);
+  }
+  if (detailBits.length) {
+    const detailsEl = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'details';
+    const pre = document.createElement('pre');
+    pre.className = 'message';
+    pre.textContent = detailBits.join('\n');
+    detailsEl.append(summary, pre);
+    item.append(detailsEl);
+  }
   if (details.prompt) {
     const prompt = document.createElement('div');
     prompt.className = 'prompt';
     prompt.textContent = `you> ${details.prompt}`;
     item.append(prompt);
   }
+  item.dataset.search = [label, body, details.prompt, details.executionId, details.sessionId]
+    .filter(Boolean)
+    .join(' ');
   activityHistoryEl.prepend(item);
+  applyHistoryFilter();
 }
 
 function setActions(items) {
@@ -354,13 +391,14 @@ function renderChatResult(result) {
         .join('\n\n'),
       ['consent', requestFingerprint, ...pending.map((p) => p.riskTier)],
     );
-    pushHistory('consent', 'Consent Needed', pending.map((p) => p.toolName).join(', '));
-    pushHistory(
-      'consent',
-      'Execution Pending Approval',
-      pending.map((p) => `${p.toolName} (${p.riskTier})`).join(', '),
-      { status: 'waiting', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
-    );
+    pushHistory('consent', 'Execution Pending Approval', pending.map((p) => `${p.toolName} (${p.riskTier})`).join(', '), {
+      status: 'waiting',
+      prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null,
+      executionId: result.audit_id || null,
+      sessionId: result.session_id || null,
+      proposed: pending.map((p) => `${p.toolName}:${p.reason}`),
+      risks: pending.map((p) => p.riskTier),
+    });
     return;
   }
 
@@ -377,12 +415,18 @@ function renderChatResult(result) {
         .join('\n\n'),
       executed.map((evt) => normalizeTier(evt.capability_tier)),
     );
-    pushHistory('ok', 'Action Executed', executed.map((evt) => evt.tool_name).join(', '));
     pushHistory(
       'ok',
       'Execution Completed',
       (result.final_text || 'Completed').toString(),
-      { status: 'success', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+      {
+        status: 'success',
+        prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null,
+        executionId: result.audit_id || null,
+        sessionId: result.session_id || null,
+        proposed: proposedActions.map((evt) => `${evt.tool_name}:${evt.status}`),
+        executed: executed.map((evt) => `${evt.tool_name}:${evt.status}`),
+      },
     );
   } else if (denied.length > 0) {
     setCurrentAction(
@@ -391,21 +435,30 @@ function renderChatResult(result) {
       denied.map((evt) => `${evt.tool_name}: ${evt.reason || 'Denied'}`).join('\n'),
       denied.map((evt) => normalizeTier(evt.capability_tier)),
     );
-    pushHistory('warn', 'Action Denied', denied.map((evt) => evt.tool_name).join(', '));
     pushHistory(
       'warn',
       'Execution Denied',
       denied.map((evt) => `${evt.tool_name}: ${evt.reason || 'Denied'}`).join(', '),
-      { status: 'failed', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+      {
+        status: 'failed',
+        prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null,
+        executionId: result.audit_id || null,
+        sessionId: result.session_id || null,
+        proposed: denied.map((evt) => `${evt.tool_name}:${evt.status}`),
+      },
     );
   } else {
     setCurrentAction('event', 'No Action Taken', 'The request completed without executing a tool action.', ['idle']);
-    pushHistory('event', 'No Action Taken', 'Request completed without executing a tool action.');
     pushHistory(
       'event',
       'Execution Completed',
       (result.final_text || 'No action taken').toString(),
-      { status: 'completed', prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null },
+      {
+        status: 'completed',
+        prompt: lastChatContext && lastChatContext.prompt ? lastChatContext.prompt : null,
+        executionId: result.audit_id || null,
+        sessionId: result.session_id || null,
+      },
     );
   }
 }
@@ -855,6 +908,13 @@ promptEl.addEventListener('keydown', async (event) => {
     });
   }
 });
+
+if (historySearchEl) {
+  historySearchEl.addEventListener('input', () => {
+    historyFilter = historySearchEl.value || '';
+    applyHistoryFilter();
+  });
+}
 
 transport = detectTransport();
 clearHistory();
