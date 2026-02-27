@@ -116,7 +116,6 @@ function pushHistory(kind, label, body, details = {}) {
 
   item.append(meta, text);
   const detailBits = [];
-  if (details.executionId) detailBits.push(`execution: ${details.executionId}`);
   if (details.sessionId) detailBits.push(`session: ${details.sessionId}`);
   if (Array.isArray(details.proposed) && details.proposed.length) {
     detailBits.push(`proposed: ${details.proposed.join(', ')}`);

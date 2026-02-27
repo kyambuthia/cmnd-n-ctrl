@@ -274,7 +274,6 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
             );
             lines.push(Line::from(row));
             if idx == app.selected_execution && app.show_execution_details {
-                lines.push(Line::from(format!("   exec_id> {}", entry.execution_id)));
                 lines.push(Line::from(format!("   assistant> {}", entry.assistant_text)));
                 if let Some(session_id) = &entry.session_id {
                     lines.push(Line::from(format!("   session> {}", session_id)));

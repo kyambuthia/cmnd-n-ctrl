@@ -448,17 +448,31 @@ fn run_repl(client: &mut JsonRpcClient<AgentService>) -> io::Result<()> {
             continue;
         }
         if let Some(rest) = input.strip_prefix("/replay ") {
-            let execution_id = rest.trim();
-            if execution_id.is_empty() {
-                println!("system> usage: /replay <execution_id>");
+            let replay_target = rest.trim();
+            if replay_target.is_empty() {
+                println!("system> usage: /replay <index|execution_id>");
                 continue;
             }
-            let Some(item) = history.iter().rev().find(|x| x.execution_id == execution_id).cloned() else {
-                println!("system> execution not found: {}", execution_id);
+            let maybe_index = replay_target.trim_start_matches('#').parse::<usize>().ok();
+            let item = if let Some(index) = maybe_index {
+                if index == 0 {
+                    None
+                } else {
+                    history.iter().rev().nth(index - 1).cloned()
+                }
+            } else {
+                history
+                    .iter()
+                    .rev()
+                    .find(|x| x.execution_id == replay_target)
+                    .cloned()
+            };
+            let Some(item) = item else {
+                println!("system> replay target not found: {}", replay_target);
                 continue;
             };
             let Some(prompt) = item.user_prompt.clone() else {
-                println!("system> execution {} has no replayable prompt", execution_id);
+                println!("system> selected entry has no replayable prompt");
                 continue;
             };
             let chat_request = ChatRequest {
@@ -593,7 +607,7 @@ fn print_repl_help() {
     println!("  /session new|clear|show");
     println!("  /history");
     println!("  /history find <text>");
-    println!("  /replay <execution_id>");
+    println!("  /replay <index|execution_id>");
     println!("  /consent list");
     println!("  /consent approve <id>");
     println!("  /consent deny <id>");
@@ -1228,7 +1242,7 @@ fn print_repl_history(items: &[ExecutionFeedItem], query: Option<&str>) {
     let query_lower = query.map(|q| q.to_ascii_lowercase());
     println!("system> execution history:");
     let mut shown = 0usize;
-    for item in items.iter().rev() {
+    for (index, item) in items.iter().rev().enumerate() {
         let prompt = item
             .user_prompt
             .clone()
@@ -1249,9 +1263,9 @@ fn print_repl_history(items: &[ExecutionFeedItem], query: Option<&str>) {
         }
         shown += 1;
         println!(
-            "  - {} [{}] prompt={}",
-            item.execution_id,
-            item.status,
+            "  {}. {} prompt={}",
+            index + 1,
+            compact_status(&item.status),
             truncate_inline(&prompt, 72)
         );
     }
@@ -1267,6 +1281,15 @@ fn truncate_inline(input: &str, max: usize) -> String {
         format!("{out}...")
     } else {
         out
+    }
+}
+
+fn compact_status(status: &str) -> &str {
+    match status {
+        "completed" => "done",
+        "denied" => "blocked",
+        "error" => "failed",
+        other => other,
     }
 }
 
