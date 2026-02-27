@@ -3,11 +3,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ipc::jsonrpc::{Id, Request};
-use ipc::{AuditEntry, ChatMessage, ChatMode, ChatRequest, ChatResponse, JsonRpcClient, PendingConsentRecord, Session, SessionSummary};
+use ipc::{AuditEntry, ChatMessage, ChatMode, ChatRequest, ChatResponse, ExecutionFeedItem, JsonRpcClient, PendingConsentRecord, Session, SessionSummary};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use serde::de::DeserializeOwned;
@@ -48,6 +48,9 @@ struct TuiApp {
     require_confirmation: bool,
     provider_name: String,
     last_chat_response: Option<ChatResponse>,
+    feed: Vec<ExecutionFeedItem>,
+    selected_execution: usize,
+    show_execution_details: bool,
 }
 
 fn pane_title(base: &str, focused: bool) -> String {
@@ -82,6 +85,9 @@ impl TuiApp {
             require_confirmation: true,
             provider_name: "openai-stub".to_string(),
             last_chat_response: None,
+            feed: Vec::new(),
+            selected_execution: 0,
+            show_execution_details: false,
         }
     }
 
@@ -152,6 +158,14 @@ fn run_loop(
                     }
                     KeyCode::Down | KeyCode::Char('j') => move_selection(app, 1),
                     KeyCode::Up | KeyCode::Char('k') => move_selection(app, -1),
+                    KeyCode::Char('v') if app.focus == FocusPane::Chat => {
+                        app.show_execution_details = !app.show_execution_details;
+                        app.set_status(if app.show_execution_details {
+                            "Execution details expanded"
+                        } else {
+                            "Execution details collapsed"
+                        });
+                    }
                     KeyCode::Enter => match app.focus {
                         FocusPane::Sessions => load_selected_session(client, app)?,
                         FocusPane::Chat => send_chat(client, app)?,
@@ -244,60 +258,52 @@ fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp)
 
 fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     let mut lines = Vec::<Line>::new();
-    if let Some(session) = &app.session_detail {
-        for m in &session.messages {
-            let (label, color) = match m.role.as_str() {
-                "user" => ("you", Color::Blue),
-                "assistant" => ("assistant", Color::Green),
-                "system" => ("system", Color::Yellow),
-                _ => ("msg", Color::Cyan),
+    if !app.feed.is_empty() {
+        for (idx, entry) in app.feed.iter().enumerate().rev() {
+            let marker = if idx == app.selected_execution && app.focus == FocusPane::Chat {
+                ">"
+            } else {
+                " "
             };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{label}> "),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(m.content.clone()),
-            ]));
+            let row = format!(
+                "{marker} [{}] {} {}",
+                entry.status,
+                entry.execution_id,
+                entry
+                    .user_prompt
+                    .as_deref()
+                    .map(|p| truncate_inline(p, 56))
+                    .unwrap_or_else(|| "(no prompt)".to_string())
+            );
+            lines.push(Line::from(row));
+            if idx == app.selected_execution && app.show_execution_details {
+                lines.push(Line::from(format!("   assistant> {}", entry.assistant_text)));
+                if let Some(consent) = &entry.consent_request {
+                    lines.push(Line::from(format!("   consent?> {}", consent.human_summary)));
+                }
+                if !entry.proposed_actions.is_empty() || !entry.executed_action_events.is_empty() {
+                    let proposed = entry
+                        .proposed_actions
+                        .iter()
+                        .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let executed = entry
+                        .executed_action_events
+                        .iter()
+                        .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(Line::from(format!("   tools> p=[{}] e=[{}]", proposed, executed)));
+                }
+            }
         }
     } else {
-        lines.push(Line::from("system> create a session with 'n' or send a message"));
-    }
-    if let Some(resp) = &app.last_chat_response {
-        let feed = resp.to_execution_feed_item(None);
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("assistant: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw(resp.final_text.clone()),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("system> ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(format!(
-                "{} exec={} pending_consents={}",
-                feed.status,
-                feed.execution_id,
-                app.consents.len()
-            )),
-        ]));
-        if !feed.proposed_actions.is_empty() || !feed.executed_action_events.is_empty() {
-            let proposed = feed
-                .proposed_actions
-                .iter()
-                .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let executed = feed
-                .executed_action_events
-                .iter()
-                .map(|evt| format!("{}:{}", evt.tool_name, evt.status))
-                .collect::<Vec<_>>()
-                .join(", ");
-            lines.push(Line::from(format!("tools> p=[{}] e=[{}]", proposed, executed)));
-        }
+        lines.push(Line::from("system> no executions yet; send a natural-language request"));
     }
     let chat = Paragraph::new(lines)
         .block(focused_block(
-            pane_title("Feed", app.focus == FocusPane::Chat),
+            pane_title("Feed (v details)", app.focus == FocusPane::Chat),
             app.focus == FocusPane::Chat,
         ))
         .wrap(Wrap { trim: false });
@@ -435,7 +441,14 @@ fn move_selection(app: &mut TuiApp, delta: isize) {
             let idx = (app.selected_audit as isize + delta).clamp(0, len - 1);
             app.selected_audit = idx as usize;
         }
-        FocusPane::Chat => {}
+        FocusPane::Chat => {
+            if app.feed.is_empty() {
+                return;
+            }
+            let len = app.feed.len() as isize;
+            let idx = (app.selected_execution as isize + delta).clamp(0, len - 1);
+            app.selected_execution = idx as usize;
+        }
     }
 }
 
@@ -548,7 +561,7 @@ fn send_chat(client: &mut JsonRpcClient<AgentService>, app: &mut TuiApp) -> Resu
         session_id: app.current_session_id(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: prompt.clone(),
         }],
         provider_config: ipc::ProviderConfig {
             provider_name: app.provider_name.clone(),
@@ -563,6 +576,8 @@ fn send_chat(client: &mut JsonRpcClient<AgentService>, app: &mut TuiApp) -> Resu
     };
     let response: ChatResponse = local_call(client, "chat.request", serde_json::to_value(request).unwrap_or(json!({})))?;
     app.last_chat_response = Some(response.clone());
+    app.feed.push(response.to_execution_feed_item(Some(prompt)));
+    app.selected_execution = app.feed.len().saturating_sub(1);
     if let Some(sid) = response.session_id.as_ref() {
         if let Some(idx) = app.sessions.iter().position(|s| &s.id == sid) {
             app.selected_session = idx;
@@ -589,6 +604,8 @@ fn approve_selected_consent(client: &mut JsonRpcClient<AgentService>, app: &mut 
         }
     };
     app.last_chat_response = Some(response.clone());
+    app.feed.push(response.to_execution_feed_item(None));
+    app.selected_execution = app.feed.len().saturating_sub(1);
     load_selected_session(client, app)?;
     refresh_consents(client, app)?;
     refresh_audit(client, app)?;
@@ -609,11 +626,23 @@ fn deny_selected_consent(client: &mut JsonRpcClient<AgentService>, app: &mut Tui
             return Ok(());
         }
     };
-    app.last_chat_response = Some(response);
+    app.last_chat_response = Some(response.clone());
+    app.feed.push(response.to_execution_feed_item(None));
+    app.selected_execution = app.feed.len().saturating_sub(1);
     refresh_consents(client, app)?;
     refresh_audit(client, app)?;
     app.set_status("Consent denied");
     Ok(())
+}
+
+fn truncate_inline(input: &str, max: usize) -> String {
+    let mut chars = input.chars();
+    let out: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
+        format!("{out}...")
+    } else {
+        out
+    }
 }
 
 fn humanize_consent_error(err: &str) -> String {
