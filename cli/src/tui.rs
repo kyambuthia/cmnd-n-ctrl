@@ -1,5 +1,5 @@
 use agent::AgentService;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ipc::jsonrpc::{Id, Request};
@@ -178,7 +178,13 @@ fn run_loop(
                     KeyCode::Esc if app.focus == FocusPane::Chat => {
                         app.chat_input.clear();
                     }
-                    KeyCode::Char(ch) if app.focus == FocusPane::Chat => {
+                    KeyCode::Char(ch)
+                        if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        if app.focus != FocusPane::Chat {
+                            app.focus = FocusPane::Chat;
+                        }
                         app.chat_input.push(ch);
                     }
                     _ => {}
@@ -221,11 +227,7 @@ fn render(frame: &mut Frame, app: &TuiApp) {
         render_right(frame, columns[2], app);
     }
 
-    let input_rows = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(15), Constraint::Percentage(70), Constraint::Percentage(15)])
-        .split(outer[1]);
-    render_input(frame, input_rows[1], app);
+    render_input(frame, outer[1], app);
     render_status(frame, outer[2], app);
 }
 
