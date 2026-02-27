@@ -163,17 +163,17 @@ fn render(frame: &mut Frame, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(10),
-            Constraint::Length(4),
-            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(25),
-            Constraint::Percentage(45),
-            Constraint::Percentage(30),
+            Constraint::Percentage(24),
+            Constraint::Percentage(50),
+            Constraint::Percentage(26),
         ])
         .split(outer[0]);
 
@@ -216,22 +216,28 @@ fn render_sessions(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp)
 fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(10)])
+        .constraints([Constraint::Min(8), Constraint::Length(8)])
         .split(area);
 
     let mut lines = Vec::<Line>::new();
     if let Some(session) = &app.session_detail {
         for m in &session.messages {
+            let (label, color) = match m.role.as_str() {
+                "user" => ("you", Color::Blue),
+                "assistant" => ("assistant", Color::Green),
+                "system" => ("system", Color::Yellow),
+                _ => ("msg", Color::Cyan),
+            };
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("{}: ", m.role),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    format!("{label}> "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(m.content.clone()),
             ]));
         }
     } else {
-        lines.push(Line::from("(select or create a session)"));
+        lines.push(Line::from("system> create a session with 'n' or send a message"));
     }
     if let Some(resp) = &app.last_chat_response {
         lines.push(Line::from(""));
@@ -239,38 +245,49 @@ fn render_chat(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
             Span::styled("assistant: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw(resp.final_text.clone()),
         ]));
-        if let Some(consent) = &resp.consent_request {
-            lines.push(Line::from(format!("consent: {}", consent.human_summary)));
-        }
+        lines.push(Line::from(vec![
+            Span::styled("system> ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("state={} audit={}", resp.execution_state, resp.audit_id)),
+        ]));
     }
     let chat = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(if app.focus == FocusPane::Chat { "Chat *" } else { "Chat" }),
+                .title(if app.focus == FocusPane::Chat { "Feed *" } else { "Feed" }),
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(chat, rows[0]);
 
     let detail_text = if let Some(resp) = &app.last_chat_response {
-        format!(
-            "audit_id: {}\nstate: {}\nrequest: {}\nactions: {}\nproposed: {}\nexecuted: {}",
-            resp.audit_id,
-            resp.execution_state,
-            resp.request_fingerprint,
-            if resp.actions_executed.is_empty() {
-                "(none)".to_string()
-            } else {
-                resp.actions_executed.join(", ")
-            },
-            resp.proposed_actions.len(),
-            resp.executed_action_events.len()
-        )
+        let mut lines = vec![
+            format!("state: {}", resp.execution_state),
+            format!("audit: {}", resp.audit_id),
+        ];
+        if let Some(consent_token) = &resp.consent_token {
+            lines.push(format!("consent_token: {}", consent_token));
+        }
+        if let Some(consent) = &resp.consent_request {
+            lines.push(format!("consent: {}", consent.human_summary));
+        }
+        if !resp.proposed_actions.is_empty() {
+            lines.push("proposed:".to_string());
+            for evt in &resp.proposed_actions {
+                lines.push(format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status));
+            }
+        }
+        if !resp.executed_action_events.is_empty() {
+            lines.push("executed:".to_string());
+            for evt in &resp.executed_action_events {
+                lines.push(format!("  - {} [{}] {}", evt.tool_name, evt.capability_tier, evt.status));
+            }
+        }
+        lines.join("\n")
     } else {
-        "No chat response yet.".to_string()
+        "No execution yet.".to_string()
     };
     let detail = Paragraph::new(detail_text)
-        .block(Block::default().borders(Borders::ALL).title("Execution View"))
+        .block(Block::default().borders(Borders::ALL).title("Execution"))
         .wrap(Wrap { trim: false });
     frame.render_widget(detail, rows[1]);
 }
@@ -292,7 +309,8 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
                 } else {
                     String::new()
                 };
-                ListItem::new(format!("{} {}{}", c.consent_id, c.tool_name, ttl))
+                let label = format!("{} [{}] {}{}", c.consent_id, c.capability_tier, c.tool_name, ttl);
+                ListItem::new(label)
             })
             .collect()
     };
@@ -302,9 +320,9 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
         Some(app.selected_consent.min(app.consents.len() - 1))
     });
     let consent_title = if app.focus == FocusPane::Consents {
-        "Approvals *"
+        "Consent *"
     } else {
-        "Approvals"
+        "Consent"
     };
     let consent_list = List::new(consent_items)
         .block(Block::default().borders(Borders::ALL).title(consent_title))
@@ -339,11 +357,11 @@ fn render_right(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
 
 fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
     let title = format!(
-        "Input [{}] provider={} session={} (Enter=send, n=new session, a/d approvals, Tab switch)",
+        "Input [{}] provider={} session={} (Enter send, Tab pane, n new, a/d consent)",
         if app.require_confirmation {
-            "require-confirmation"
+            "confirm"
         } else {
-            "best-effort"
+            "best"
         },
         app.provider_name,
         app.current_session_id().unwrap_or_else(|| "(none)".to_string())
@@ -355,7 +373,14 @@ fn render_input(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
 }
 
 fn render_status(frame: &mut Frame, area: ratatui::layout::Rect, app: &TuiApp) {
-    let status = Paragraph::new(app.status.as_str()).style(Style::default().fg(Color::Gray));
+    let pane = match app.focus {
+        FocusPane::Sessions => "sessions",
+        FocusPane::Chat => "feed",
+        FocusPane::Consents => "consent",
+        FocusPane::Audit => "audit",
+    };
+    let status = Paragraph::new(format!("pane={pane} | {}", app.status))
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(status, area);
 }
 
